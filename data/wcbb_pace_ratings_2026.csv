@@ -1,0 +1,405 @@
+Rank,Team,AdjPace
+1,Oklahoma,81.4
+2,Troy,80.3
+3,North Carolina Central,79.3
+4,LSU,79.2
+5,Arkansas State,79.1
+6,Indiana State,79.0
+7,Mississippi Valley State,77.9
+8,New Orleans,77.4
+9,Murray State,76.8
+10,Florida State,76.7
+11,Jacksonville,76.7
+12,Memphis,76.6
+13,Longwood,76.5
+14,Oral Roberts,76.5
+15,Arkansas,76.4
+16,Texas Southern,76.4
+17,Idaho,76.3
+18,Ohio,76.3
+19,Ohio State,76.3
+20,Penn State,76.1
+21,Valparaiso,76.1
+22,Santa Clara,75.9
+23,Ball State,75.8
+24,Coastal Carolina,75.8
+25,Prairie View A&M,75.8
+26,Coppin State,75.7
+27,Montana State,75.7
+28,Niagara,75.7
+29,Tennessee,75.7
+30,Stephen F. Austin,75.6
+31,Arizona,75.5
+32,Northern Arizona,75.3
+33,Alabama State,75.2
+34,Cal State Northridge,75.2
+35,FIU,75.2
+36,Michigan,75.2
+37,Houston,75.1
+38,California Baptist,75.0
+39,Cal State Fullerton,74.9
+40,Grambling State,74.8
+41,Tennessee State,74.8
+42,San Francisco,74.7
+43,Akron,74.6
+44,Southern Miss,74.6
+45,Portland,74.4
+46,Chicago State,74.2
+47,Eastern Washington,74.2
+48,Tulsa,74.2
+49,Florida,74.1
+50,Old Dominion,74.1
+51,South Carolina,74.1
+52,UTA,74.1
+53,Missouri,74.0
+54,ULM,74.0
+55,South Carolina State,73.9
+56,Connecticut,73.8
+57,Louisiana,73.8
+58,Vanderbilt,73.8
+59,Iowa State,73.7
+60,Michigan State,73.7
+61,Buffalo,73.6
+62,Maryland,73.5
+63,Siena,73.5
+64,SMU,73.5
+65,Texas State,73.5
+66,Winthrop,73.5
+67,Mississippi State,73.4
+68,North Texas,73.4
+69,Notre Dame,73.4
+70,Southern Illinois,73.4
+71,Bowling Green,73.3
+72,Evansville,73.3
+73,Georgia Tech,73.3
+74,Seattle University,73.3
+75,Utah Tech,73.3
+76,BYU,73.2
+77,Drake,73.2
+78,Georgia State,73.2
+79,Sam Houston State,73.2
+80,Texas,73.2
+81,Maryland Eastern Shore,73.1
+82,North Carolina State,73.1
+83,Temple,73.1
+84,Texas A&M,73.1
+85,Kent State,73.0
+86,Norfolk State,73.0
+87,Saint Louis,73.0
+88,San Jose State,73.0
+89,Virginia Tech,73.0
+90,DePaul,72.9
+91,High Point,72.9
+92,West Georgia,72.9
+93,South Alabama,72.8
+94,Cal State Bakersfield,72.7
+95,Cincinnati,72.7
+96,Florida A&M,72.7
+97,Weber State,72.7
+98,IU Indianapolis,72.6
+99,Central Michigan,72.5
+100,Oklahoma State,72.5
+101,Purdue Fort Wayne,72.5
+102,West Virginia,72.5
+103,Duke,72.4
+104,Nebraska,72.4
+105,North Florida,72.4
+106,Oregon,72.4
+107,Tulane,72.4
+108,Detroit,72.3
+109,Grand Canyon,72.3
+110,Syracuse,72.3
+111,Furman,72.2
+112,James Madison,72.2
+113,Portland State,72.2
+114,Southeast Missouri,72.2
+115,UC San Diego,72.2
+116,UNC Asheville,72.2
+117,USC,72.2
+118,Baylor,72.1
+119,North Dakota,72.1
+120,Pepperdine,72.1
+121,Radford,72.1
+122,Arkansas-Pine Bluff,72.0
+123,Belmont,72.0
+124,Duquesne,72.0
+125,Kansas State,72.0
+126,New Mexico State,72.0
+127,South Florida,72.0
+128,Howard,71.9
+129,Merrimack,71.9
+130,Missouri State,71.9
+131,Northern Kentucky,71.9
+132,Pittsburgh,71.9
+133,Utah Valley,71.9
+134,East Carolina,71.8
+135,Iowa,71.8
+136,La Salle,71.8
+137,Southern,71.8
+138,Boise State,71.7
+139,Boston College,71.7
+140,FAU,71.7
+141,Queens,71.7
+142,Eastern Kentucky,71.6
+143,Louisville,71.6
+144,Presbyterian College,71.6
+145,Arizona State,71.5
+146,Illinois,71.5
+147,Southern Utah,71.5
+148,UAB,71.5
+149,Cal Poly,71.4
+150,Charleston Southern,71.4
+151,Eastern Michigan,71.4
+152,Georgia,71.4
+153,Ole Miss,71.4
+154,UTEP,71.4
+155,Long Island,71.3
+156,Saint Francis (PA),71.3
+157,Tarleton State,71.3
+158,Delaware State,71.2
+159,Idaho State,71.2
+160,East Texas A&M,71.1
+161,Texas Tech,71.1
+162,Villanova,71.1
+163,Bellarmine,71.0
+164,Central Connecticut,71.0
+165,Mount Saint Mary's,71.0
+166,Nicholls,71.0
+167,Northwestern,71.0
+168,Rice,71.0
+169,Bradley,70.9
+170,Kennesaw State,70.9
+171,Miami (FL),70.9
+172,Purdue,70.8
+173,Towson,70.8
+174,Delaware,70.7
+175,Toledo,70.7
+176,UCF,70.7
+177,Wichita State,70.7
+178,Morehead State,70.6
+179,Northern Iowa,70.6
+180,Colorado,70.5
+181,Fresno State,70.5
+182,Gonzaga,70.5
+183,Indiana,70.5
+184,Lipscomb,70.5
+185,Miami (OH),70.5
+186,Morgan State,70.5
+187,UC Davis,70.5
+188,UMass,70.5
+189,Eastern Illinois,70.4
+190,Fordham,70.4
+191,Kentucky,70.4
+192,North Alabama,70.4
+193,North Carolina,70.4
+194,TCU,70.4
+195,UC Riverside,70.4
+196,Utah,70.4
+197,VCU,70.4
+198,Washington State,70.4
+199,Charleston,70.3
+200,Creighton,70.3
+201,Dayton,70.3
+202,Kansas,70.3
+203,Long Beach State,70.3
+204,Stanford,70.3
+205,UNCW,70.3
+206,Cleveland State,70.2
+207,Illinois State,70.2
+208,New Mexico,70.2
+209,Seton Hall,70.2
+210,Wagner,70.1
+211,Wisconsin,70.1
+212,Abilene Christian,70.0
+213,Alcorn State,70.0
+214,Denver,70.0
+215,Incarnate Word,70.0
+216,Little Rock,70.0
+217,Marshall,70.0
+218,Southern Indiana,70.0
+219,Western Illinois,70.0
+220,Bethune-Cookman,69.9
+221,Manhattan,69.9
+222,Montana,69.9
+223,Northern Colorado,69.9
+224,Pacific,69.9
+225,UCLA,69.9
+226,Columbia,69.8
+227,Fairfield,69.8
+228,Houston Christian,69.8
+229,South Dakota State,69.8
+230,Utah State,69.8
+231,Alabama A&M,69.7
+232,California,69.7
+233,Jackson State,69.7
+234,Omaha,69.7
+235,Wright State,69.7
+236,Charlotte,69.6
+237,Loyola-Marymount,69.6
+238,Navy,69.6
+239,Oakland,69.6
+240,San Diego,69.6
+241,Sacramento State,69.5
+242,Alabama,69.4
+243,Central Arkansas,69.4
+244,Elon,69.4
+245,Mercer,69.4
+246,Texas A&M-Corpus Christi,69.4
+247,Butler,69.3
+248,Georgia Southern,69.3
+249,Providence,69.3
+250,South Dakota,69.3
+251,Wake Forest,69.3
+252,UTRGV,69.2
+253,Virginia,69.2
+254,Xavier,69.2
+255,Louisiana Tech,69.1
+256,North Dakota State,69.1
+257,Stetson,69.1
+258,Auburn,69.0
+259,North Carolina A&T,69.0
+260,Rutgers,69.0
+261,Green Bay,68.9
+262,Mercyhurst,68.9
+263,Tennessee Tech,68.9
+264,UMKC,68.9
+265,Western Michigan,68.9
+266,UNLV,68.8
+267,Southeastern Louisiana,68.7
+268,Western Carolina,68.7
+269,Yale,68.7
+270,Canisius,68.6
+271,Northern Illinois,68.6
+272,Robert Morris,68.6
+273,Saint Bonaventure,68.6
+274,Lamar,68.5
+275,McNeese,68.5
+276,UC Santa Barbara,68.5
+277,Air Force,68.4
+278,George Mason,68.4
+279,Marquette,68.4
+280,Tennessee-Martin,68.4
+281,Washington,68.4
+282,Youngstown State,68.4
+283,Milwaukee,68.3
+284,Northwestern State,68.3
+285,William & Mary,68.3
+286,FGCU,68.2
+287,Marist,68.2
+288,Northeastern,68.2
+289,Hawaii,68.1
+290,San Diego State,68.1
+291,UC Irvine,68.1
+292,UIC,68.1
+293,Hampton,68.0
+294,Western Kentucky,68.0
+295,Minnesota,67.9
+296,Stonehill,67.9
+297,Gardner-Webb,67.8
+298,Georgetown,67.8
+299,South Carolina Upstate,67.8
+300,Harvard,67.7
+301,Nevada,67.6
+302,NJIT,67.6
+303,Holy Cross,67.5
+304,Iona,67.5
+305,Saint Thomas,67.5
+306,Lindenwood,67.4
+307,Loyola-Chicago,67.4
+308,Rider,67.4
+309,UTSA,67.4
+310,Appalachian State,67.3
+311,Brown,67.3
+312,Saint John's,67.3
+313,Davidson,67.2
+314,SIUE,67.2
+315,Lehigh,67.1
+316,Princeton,67.0
+317,Saint Joseph's,67.0
+318,Austin Peay,66.9
+319,Oregon State,66.9
+320,Sacred Heart,66.9
+321,Wofford,66.9
+322,Le Moyne,66.7
+323,Middle Tennessee,66.7
+324,Richmond,66.7
+325,UMBC,66.7
+326,Liberty,66.6
+327,Monmouth,66.5
+328,Saint Mary's College,66.5
+329,Bryant,66.4
+330,Colorado State,66.4
+331,Samford,66.4
+332,American,66.2
+333,Binghamton,66.2
+334,Chattanooga,66.2
+335,Jacksonville State,66.1
+336,Penn,66.1
+337,Saint Peter's,65.9
+338,UNCG,65.9
+339,Colgate,65.7
+340,Wyoming,65.7
+341,Campbell,65.6
+342,Clemson,65.6
+343,Maine,65.6
+344,New Hampshire,65.6
+345,New Haven,65.6
+346,Lafayette,65.5
+347,Rhode Island,65.4
+348,George Washington,65.2
+349,Quinnipiac,65.2
+350,East Tennessee State,65.0
+351,Hofstra,65.0
+352,Army,64.9
+353,Fairleigh Dickinson,64.9
+354,Stony Brook,64.6
+355,UMass-Lowell,64.6
+356,Dartmouth,64.2
+357,Loyola-Maryland,64.1
+358,Drexel,63.9
+359,Bucknell,62.9
+360,Cornell,62.9
+361,Boston University,62.0
+362,Vermont,62.0
+363,Albany,60.7
+364,Florida Atlantic,71.7
+365,Loyola Chicago,67.4
+366,Loyola Maryland,64.1
+367,Massachusetts,70.5
+368,UNC Greensboro,65.9
+369,UNC Wilmington,70.3
+370,SIU Edwardsville,67.2
+371,Kansas City,68.9
+372,UL Monroe,74.0
+373,Florida Gulf Coast,68.2
+374,Florida International,75.2
+375,LIU,71.3
+376,St. Thomas-Minnesota,67.5
+377,St. John's,67.3
+378,St. Bonaventure,68.6
+379,UAlbany,60.7
+380,UT Martin,68.4
+381,UT Rio Grande Valley,69.2
+382,UT Arlington,74.1
+383,App State,67.3
+384,Grambling,74.8
+385,Sam Houston,73.2
+386,Southeast Missouri State,72.2
+387,USC Upstate,67.8
+388,American University,66.2
+389,Detroit Mercy,72.3
+390,Seattle U,73.3
+391,IU Indy,72.6
+392,Southern University,71.8
+393,Presbyterian,71.6
+394,Queens University,71.7
+395,SE Louisiana,68.7
+396,Mount St. Mary's,71.0
+397,Saint Mary's,66.5
+398,NC State,73.1
+399,Pennsylvania,66.1
+400,Miami,70.9
+401,Saint Francis,71.3
+402,Loyola Marymount,69.6
+403,Arkansas Pine Bluff,72.0
+404,UMass Lowell,64.6
