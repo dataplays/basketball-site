@@ -1393,7 +1393,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     {% for lname, lcount in league_summary %}
       <span>{{ lname }}: {{ lcount }}</span>
     {% endfor %}
-    <a href="/refresh">Refresh Ratings</a>
+    <a href="refresh">Refresh Ratings</a>
     <span id="countdown-wrap">Next update: <span id="countdown">30</span>s</span>
   </div>
 </header>

@@ -914,7 +914,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <span>{{ total_games }} game{{ "s" if total_games != 1 }}</span>
     <span>HCA: &plusmn;{{ "%.1f"|format(hca_half) }} pts/side</span>
     <span>RTM: {{ blowout_threshold }}+ pt lead</span>
-    <a href="/refresh">Refresh Ratings</a>
+    <a href="refresh">Refresh Ratings</a>
     <span id="countdown-wrap">Next update: <span id="countdown">30</span>s</span>
   </div>
 </header>
