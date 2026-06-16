@@ -1205,7 +1205,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     <span>Ratings: {{ ratings_source }}</span>
     <span>HCA: {{ hca_points }} pts (0 at neutral)</span>
     <span style="color:var(--amber)" title="Regression to the Mean: at {{ blowout_threshold }}+ pt leads, projections regress toward league avg">RTM: {{ blowout_threshold }}+ pts</span>
-    <a href="/refresh">Refresh Ratings</a>
+    <a href="refresh">Refresh Ratings</a>
     <span id="countdown-wrap">Next update: <span id="countdown">30</span>s</span>
   </div>
 </header>
