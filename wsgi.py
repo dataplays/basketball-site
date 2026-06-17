@@ -99,6 +99,15 @@ for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     except Exception as e:
         print(f"[warn] could not load extra dashboard {_modname}: {e}")
 
+# Extra command-line tools (not matching *_props_*.py) to expose on the Tools page.
+EXTRA_TOOLS = {
+    "update_all_stats": "Update All Stats \u2014 refresh NBA/WNBA/CBB/WCBB ratings",
+}
+for _tname, _tlabel in EXTRA_TOOLS.items():
+    if (HERE / f"{_tname}.py").exists() and _tname not in TOOLS:
+        TOOLS.append(_tname)
+        TOOL_LABELS[_tname] = _tlabel
+
 # ── Landing + tools pages ────────────────────────────────────────────────────
 landing = Flask(__name__)
 
@@ -264,21 +273,35 @@ def get_report(fname):
     return send_from_directory(REPORTS_DIR, fname)
 
 
-# ── Automatic daily CBB report refresh ────────────────────────────────────────
+# ── Automatic daily refresh: update ratings, then build CBB reports ───────
 _refresh_lock = threading.Lock()
 
 
+def _run_scripts(paths, timeout=600):
+    logs = []
+    for sc in paths:
+        out, err = _run_script(sc, timeout=timeout)
+        logs.append(f"=== {sc.name} ===\n{out}{('[stderr] ' + err) if err.strip() else ''}")
+    return "\n".join(logs) if logs else "(nothing to run)"
+
+
 def run_cbb_refresh():
-    """Run every cbb_*_daily.py report generator once."""
+    """Build the daily CBB PDF report(s) only."""
     scripts = sorted(HERE.glob("cbb_*_daily.py"))
     if not scripts:
         return "no cbb_*_daily.py scripts found"
-    logs = []
     with _refresh_lock:
-        for sc in scripts:
-            out, err = _run_script(sc)
-            logs.append(f"=== {sc.name} ===\n{out}{('[stderr] ' + err) if err.strip() else ''}")
-    return "\n".join(logs)
+        return _run_scripts(scripts)
+
+
+def run_daily_refresh():
+    """Full daily job: refresh all ratings CSVs, then build the CBB reports."""
+    scripts = []
+    if (HERE / "update_all_stats.py").exists():
+        scripts.append(HERE / "update_all_stats.py")
+    scripts += sorted(HERE.glob("cbb_*_daily.py"))
+    with _refresh_lock:
+        return _run_scripts(scripts)
 
 
 def _seconds_until_next_run():
@@ -290,27 +313,28 @@ def _seconds_until_next_run():
 
 
 def _scheduler_loop():
+    # On first boot, build a CBB report if none exists yet (light; no full scrape).
     if not _reports():
-        print("[cbb-refresh] no report yet — generating now...")
+        print("[daily-refresh] no report yet — generating now...")
         try:
             run_cbb_refresh()
         except Exception as e:
-            print("[cbb-refresh] initial run error:", e)
+            print("[daily-refresh] initial run error:", e)
     while True:
         wait = _seconds_until_next_run()
-        print(f"[cbb-refresh] next run in {wait/3600:.1f}h (daily {CBB_REFRESH_HOUR:02d}:00 ET)")
+        print(f"[daily-refresh] next run in {wait/3600:.1f}h (daily {CBB_REFRESH_HOUR:02d}:00 ET)")
         time.sleep(wait)
-        print("[cbb-refresh] running daily CBB report(s)...")
+        print("[daily-refresh] updating ratings + building reports...")
         try:
-            run_cbb_refresh()
+            run_daily_refresh()
         except Exception as e:
-            print("[cbb-refresh] error:", e)
+            print("[daily-refresh] error:", e)
 
 
 def start_scheduler():
     if os.environ.get("CBB_SCHEDULER_DISABLED") == "1":
         return
-    threading.Thread(target=_scheduler_loop, name="cbb-refresh", daemon=True).start()
+    threading.Thread(target=_scheduler_loop, name="daily-refresh", daemon=True).start()
 
 
 @landing.route("/refresh-cbb", methods=["POST"])
