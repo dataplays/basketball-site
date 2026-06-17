@@ -84,6 +84,21 @@ sys.path.insert(0, str(HERE))
 DASHBOARDS = discover_dashboards()
 TOOLS = discover_tools()
 
+# Extra Flask dashboards that don't follow the *_live_projections.py naming.
+# Map: module name -> (url path, homepage label)
+EXTRA_DASHBOARDS = {
+    "median_probabilities": ("median", "Median Probabilities"),
+}
+for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
+    try:
+        _mod = importlib.import_module(_modname)
+        _app = getattr(_mod, "app", None)
+        if _app is not None:
+            DASHBOARDS[_prefix] = _app
+            DASH_LABELS[_prefix] = _label
+    except Exception as e:
+        print(f"[warn] could not load extra dashboard {_modname}: {e}")
+
 # ── Landing + tools pages ────────────────────────────────────────────────────
 landing = Flask(__name__)
 
@@ -128,7 +143,7 @@ LANDING_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <header><h1><span>&#9679;</span> Basketball Dashboards</h1>
 <div class=sub>Live projections &amp; tools &middot; updates automatically</div></header>
 <div class=container>
-  <div class=section>Live Dashboards</div>
+  <div class=section>Dashboards &amp; Calculators</div>
   {% if dashboards %}
   <div class=grid>
     {% for prefix,label in dashboards %}
