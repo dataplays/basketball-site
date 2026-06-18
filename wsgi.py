@@ -44,6 +44,17 @@ DASH_LABELS = {
     "nbl": "Australian NBL",
     "intl": "International",
 }
+# Signature accent per dashboard (matches each dashboard's own header colour),
+# used to colour-code the landing-page cards. Falls back to blue.
+DASH_COLORS = {
+    "nba": "#ff6d00",
+    "wnba": "#c2185b",
+    "cbb": "#ff4444",
+    "wcbb": "#e040a0",
+    "nbl": "#fdcb6e",
+    "intl": "#00b894",
+    "median": "#4fc3f7",
+}
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
     "wnba_props_projections": "WNBA Player Props — Projections",
@@ -111,23 +122,44 @@ for _tname, _tlabel in EXTRA_TOOLS.items():
 # ── Landing + tools pages ────────────────────────────────────────────────────
 landing = Flask(__name__)
 
+# Inline basketball favicon, served at /favicon.svg (and /favicon.ico) so every
+# page — including the mounted dashboards — gets a real icon instead of the
+# browser's generic globe.
+FAVICON_SVG = (
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>"
+    "<circle cx='16' cy='16' r='15' fill='#ff6d00'/>"
+    "<g fill='none' stroke='#1a1008' stroke-width='1.4'>"
+    "<circle cx='16' cy='16' r='15'/>"
+    "<path d='M1 16h30M16 1v30M5.2 5.2C11 10 11 22 5.2 26.8"
+    "M26.8 5.2C21 10 21 22 26.8 26.8'/></g></svg>"
+)
+# Shared <head> tags injected into every page: favicon + mobile theme colour.
+HEAD_EXTRA = (
+    '<link rel="icon" href="/favicon.svg" type="image/svg+xml">'
+    '<meta name="theme-color" content="#0f1923">'
+)
+
 PAGE_CSS = """
 :root{--bg:#0f1923;--card:#1a2634;--border:#2a3a4a;--text:#e8edf2;
 --muted:#8899aa;--accent:#ff4444;--blue:#2196f3;--green:#4caf50;}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
 background:var(--bg);color:var(--text);min-height:100vh}
-header{background:#0a1218;border-bottom:2px solid var(--accent);padding:18px 24px}
-header h1{font-size:1.5em}header h1 span{color:var(--accent)}
+header{background:linear-gradient(180deg,#101d28,#0a1218);
+border-bottom:2px solid var(--accent);padding:20px 24px}
+header h1{font-size:1.5em;letter-spacing:-.01em}header h1 span{color:var(--accent)}
 .sub{color:var(--muted);font-size:.85em;margin-top:4px}
 .container{max-width:980px;margin:0 auto;padding:24px 16px}
+.footer{max-width:980px;margin:8px auto 0;padding:18px 16px 28px;color:var(--muted);
+font-size:.8em;border-top:1px solid var(--border);text-align:center}
+.footer a{color:var(--blue);text-decoration:none}.footer a:hover{text-decoration:underline}
 .section{font-size:1.1em;font-weight:700;margin:8px 0 14px;padding-bottom:8px;
 border-bottom:1px solid var(--border)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
 a.card,div.card{display:block;background:var(--card);border:1px solid var(--border);
 border-left:4px solid var(--blue);border-radius:8px;padding:18px;color:var(--text);
 text-decoration:none;transition:border-color .2s,transform .1s}
-a.card:hover{border-color:var(--blue);transform:translateY(-2px)}
+a.card:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.38)}
 .card .t{font-size:1.15em;font-weight:700}
 .card .d{color:var(--muted);font-size:.82em;margin-top:6px}
 .tool{background:var(--card);border:1px solid var(--border);border-radius:8px;
@@ -148,6 +180,8 @@ max-height:480px}
 
 LANDING_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+<meta name=description content="Live basketball projections and betting tools for the NBA, WNBA, college and international leagues — updated automatically.">
+{{ head_extra|safe }}
 <title>Basketball Dashboards</title><style>{{ css }}</style></head><body>
 <header><h1><span>&#9679;</span> Basketball Dashboards</h1>
 <div class=sub>Live projections &amp; tools &middot; updates automatically</div></header>
@@ -155,8 +189,8 @@ LANDING_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   <div class=section>Dashboards &amp; Calculators</div>
   {% if dashboards %}
   <div class=grid>
-    {% for prefix,label in dashboards %}
-    <a class=card href="/{{ prefix }}/">
+    {% for prefix,label,color in dashboards %}
+    <a class=card style="border-left-color:{{ color }}" href="/{{ prefix }}/">
       <div class=t>{{ label }}</div>
       <div class=d>/{{ prefix }} &middot; live scores &amp; projections</div>
     </a>
@@ -184,13 +218,17 @@ LANDING_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
       </div>
     {% endif %}
   </div>
-</div></body></html>"""
+</div>
+<footer class=footer>Live data from ESPN, WarrenNolan &amp; Basketball-Reference &middot;
+projections update automatically &middot; <a href="/tools">Props Tools</a></footer>
+</body></html>"""
 
 TOOLS_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
+{{ head_extra|safe }}
 <title>Props Tools</title><style>{{ css }}</style></head><body>
 <header><h1><span>&#9679;</span> Props Tools</h1>
-<div class=sub><a class=back href="/">&larr; Back to dashboards</a></div></header>
+<div class=sub><a class=back href="/">&larr; Main Menu</a></div></header>
 <div class=container>
   {% if tools %}
   {% for name,label,missing in tools %}
@@ -224,12 +262,18 @@ def _reports(limit=6):
     return [p.name for p in pdfs[:limit]]
 
 
+@landing.route("/favicon.svg")
+@landing.route("/favicon.ico")
+def favicon():
+    return Response(FAVICON_SVG, mimetype="image/svg+xml")
+
+
 @landing.route("/")
 def home():
-    dash = sorted([(p, DASH_LABELS.get(p, p.upper())) for p in DASHBOARDS],
-                  key=lambda x: x[1])
+    dash = sorted([(p, DASH_LABELS.get(p, p.upper()), DASH_COLORS.get(p, "#2196f3"))
+                   for p in DASHBOARDS], key=lambda x: x[1])
     return render_template_string(
-        LANDING_HTML, css=PAGE_CSS, dashboards=dash,
+        LANDING_HTML, css=PAGE_CSS, head_extra=HEAD_EXTRA, dashboards=dash,
         reports=_reports(), refresh_hour=f"{CBB_REFRESH_HOUR:02d}",
     )
 
@@ -240,7 +284,27 @@ def tools_page():
     for name in TOOLS:
         missing = [f for f in TOOL_REQUIRES.get(name, []) if not (HERE / f).exists()]
         items.append((name, TOOL_LABELS.get(name, name), missing))
-    return render_template_string(TOOLS_HTML, css=PAGE_CSS, tools=items)
+    return render_template_string(TOOLS_HTML, css=PAGE_CSS, head_extra=HEAD_EXTRA,
+                                  tools=items)
+
+
+NOTFOUND_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+{{ head_extra|safe }}<title>Page not found</title><style>{{ css }}</style></head><body>
+<header><h1><span>&#9679;</span> Basketball Dashboards</h1></header>
+<div class=container style="text-align:center;padding-top:48px">
+  <div style="font-size:3.4em;font-weight:800;color:var(--accent);line-height:1">404</div>
+  <p style="color:var(--muted);margin:14px 0 26px">That page doesn't exist.</p>
+  <a class=card style="display:inline-block;border-left-color:var(--blue);text-align:left;min-width:220px"
+     href="/"><div class=t>&larr; Main Menu</div>
+     <div class=d>Back to all dashboards</div></a>
+</div></body></html>"""
+
+
+@landing.errorhandler(404)
+def not_found(_e):
+    body = render_template_string(NOTFOUND_HTML, css=PAGE_CSS, head_extra=HEAD_EXTRA)
+    return body, 404
 
 
 def _run_script(path, timeout=600):
