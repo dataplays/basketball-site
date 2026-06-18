@@ -1388,6 +1388,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <header>
   <h1><span>&#127760;</span> International Basketball Live Projections</h1>
   <div class="header-meta">
+    <a href="/" style="font-weight:600">&larr; Main Menu</a>
     <span>{{ date_display }}</span>
     <span>{{ total_games }} games across {{ league_count }} leagues</span>
     {% for lname, lcount in league_summary %}

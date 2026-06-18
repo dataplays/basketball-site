@@ -136,6 +136,7 @@ TEMPLATE = """
 </head>
 <body>
   <div class="container">
+    <a href="/" style="color:var(--accent);text-decoration:none;font-size:14px;font-weight:600;display:inline-block;margin-bottom:12px">&larr; Main Menu</a>
     <h1>Basketball Median Probabilities</h1>
     <div class="sub">Set a player's game median (points or rebounds) and see the Over/Under probability at each half-point line around it.</div>
 

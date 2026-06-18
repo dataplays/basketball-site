@@ -910,6 +910,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <header>
   <h1><span>NBL</span> Live Projections</h1>
   <div class="header-meta">
+    <a href="/" style="font-weight:600">&larr; Main Menu</a>
     <span>{{ date_display }}</span>
     <span>{{ total_games }} game{{ "s" if total_games != 1 }}</span>
     <span>HCA: &plusmn;{{ "%.1f"|format(hca_half) }} pts/side</span>
