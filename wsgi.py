@@ -408,9 +408,130 @@ def refresh_cbb_now():
 
 start_scheduler()
 
+# ── Shared chrome injected into every dashboard page ──────────────────────────
+# A slim cross-dashboard nav bar, a "last updated" footer, and a loading
+# indicator are injected at the WSGI layer so all dashboards stay in sync
+# without editing each one. The nav's active tab is derived from the mount path.
+NAV_SHORT = {"nba": "NBA", "wnba": "WNBA", "cbb": "CBB", "wcbb": "WCBB",
+             "nbl": "NBL", "intl": "Intl", "median": "Median"}
+NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "median"]
+
+INJECT_CSS = (
+    ".bb-nav{display:flex;gap:4px;overflow-x:auto;background:#0a1218;"
+    "border-bottom:1px solid #2a3a4a;padding:7px 12px;white-space:nowrap;"
+    "scrollbar-width:none;-ms-overflow-style:none}"
+    ".bb-nav::-webkit-scrollbar{height:0}"
+    ".bb-nav a{color:#8899aa;text-decoration:none;font-size:13px;font-weight:600;"
+    "padding:5px 12px;border-radius:6px;flex:0 0 auto;transition:background .15s,color .15s}"
+    ".bb-nav a:hover{background:rgba(255,255,255,.07);color:#e8edf2}"
+    ".bb-nav a.active{box-shadow:0 1px 6px rgba(0,0,0,.35)}"
+    ".bb-foot{max-width:1100px;margin:22px auto 0;padding:16px 16px 30px;"
+    "border-top:1px solid #2a3a4a;color:#8899aa;font-size:12px;text-align:center;line-height:1.8}"
+    ".bb-foot a{color:#2196f3;text-decoration:none}.bb-foot a:hover{text-decoration:underline}"
+    ".bb-dot{color:#4caf50}"
+    "@keyframes bb-spin{to{transform:rotate(360deg)}}"
+    ".bb-ind{position:fixed;right:14px;bottom:14px;display:flex;align-items:center;gap:8px;"
+    "background:#1a2634;border:1px solid #2a3a4a;color:#e8edf2;padding:8px 14px;border-radius:22px;"
+    "font-size:12px;font-weight:600;box-shadow:0 6px 18px rgba(0,0,0,.45);opacity:0;"
+    "transform:translateY(10px);transition:opacity .2s,transform .2s;pointer-events:none;z-index:60}"
+    "body.bb-loading .bb-ind{opacity:1;transform:translateY(0)}"
+    ".bb-spin{width:12px;height:12px;border:2px solid rgba(255,255,255,.25);"
+    "border-top-color:#fff;border-radius:50%;animation:bb-spin .7s linear infinite}"
+    # Polished, consistent empty state (overrides each dashboard's .no-games).
+    ".no-games{border:1px dashed #2a3a4a;border-radius:10px;"
+    "background:rgba(255,255,255,.015);padding:30px 20px;color:#8899aa;"
+    "text-align:center;font-style:normal}"
+    ".no-games::before{content:'\\1F3C0';display:block;font-size:26px;"
+    "margin-bottom:8px;opacity:.75}"
+)
+
+INJECT_FOOT = (
+    '<div class="bb-ind"><span class="bb-spin"></span>Updating…</div>'
+    '<footer class="bb-foot"><span id="bb-updated">&nbsp;</span> &middot; '
+    '<a href="/">Main Menu</a><br>Live data from ESPN, WarrenNolan &amp; Basketball-Reference</footer>'
+    "<script>(function(){"
+    "var fmt=function(){try{return new Date().toLocaleTimeString([],"
+    "{hour:'2-digit',minute:'2-digit',second:'2-digit'});}catch(e){return new Date().toLocaleTimeString();}};"
+    "var setU=function(t){var e=document.getElementById('bb-updated');"
+    "if(e)e.innerHTML='<span class=\"bb-dot\">&#9679;</span> Last updated '+t;};"
+    "setU(fmt());"
+    "var of=window.fetch;"
+    "if(of){window.fetch=function(){var a=arguments,"
+    "u=(a[0]&&a[0].url)?a[0].url:(''+a[0]),g=u.indexOf('api/games')>=0;"
+    "if(g)document.body.classList.add('bb-loading');"
+    "return of.apply(this,a).then(function(r){if(g){document.body.classList.remove('bb-loading');setU(fmt());}return r;},"
+    "function(e){if(g)document.body.classList.remove('bb-loading');throw e;});};}"
+    "})();</script>"
+)
+
+
+def _nav_html(active):
+    links = ['<a href="/">&#8962; Menu</a>']
+    for pfx in NAV_ORDER:
+        if pfx not in DASHBOARDS:
+            continue
+        label = NAV_SHORT.get(pfx, pfx.upper())
+        if pfx == active:
+            color = DASH_COLORS.get(pfx, "#2196f3")
+            links.append(f'<a href="/{pfx}/" class="active" '
+                         f'style="background:{color};color:#fff">{label}</a>')
+        else:
+            links.append(f'<a href="/{pfx}/">{label}</a>')
+    links.append('<a href="/tools">Tools</a>')
+    return '<nav class="bb-nav">' + "".join(links) + "</nav>"
+
+
+class _Injector:
+    """Buffers a mounted app's HTML response and injects the shared nav bar,
+    footer, and loading indicator. Non-HTML responses (the JSON refresh
+    endpoint, redirects) pass through untouched."""
+
+    def __init__(self, app, prefix):
+        self.app = app
+        self._css = "<style>" + INJECT_CSS + "</style>"
+        self._nav = _nav_html(prefix)
+
+    def __call__(self, environ, start_response):
+        buf, cap = [], {}
+
+        def _capture(status, headers, exc_info=None):
+            cap["status"], cap["headers"], cap["exc"] = status, headers, exc_info
+            return buf.append
+
+        result = self.app(environ, _capture)
+        try:
+            for chunk in result:
+                buf.append(chunk)
+        finally:
+            if hasattr(result, "close"):
+                result.close()
+
+        status = cap.get("status", "500 Internal Server Error")
+        headers = cap.get("headers", [])
+        ctype = next((v for k, v in headers if k.lower() == "content-type"), "")
+        body = b"".join(buf)
+
+        if status.startswith("200") and "text/html" in ctype.lower() and b"</body>" in body:
+            doc = body.decode("utf-8", "replace")
+            if "</head>" in doc:
+                doc = doc.replace("</head>", self._css + "</head>", 1)
+            if "</header>" in doc:
+                doc = doc.replace("</header>", "</header>" + self._nav, 1)
+            elif "<body>" in doc:
+                doc = doc.replace("<body>", "<body>" + self._nav, 1)
+            doc = doc.replace("</body>", INJECT_FOOT + "</body>", 1)
+            body = doc.encode("utf-8")
+
+        out = [(k, v) for k, v in headers if k.lower() != "content-length"]
+        out.append(("Content-Length", str(len(body))))
+        start_response(status, out, cap.get("exc"))
+        return [body]
+
+
 # ── Mount everything under one WSGI application ───────────────────────────────
 application = DispatcherMiddleware(
-    landing, {f"/{prefix}": app for prefix, app in DASHBOARDS.items()}
+    landing,
+    {f"/{prefix}": _Injector(app, prefix) for prefix, app in DASHBOARDS.items()},
 )
 
 if __name__ == "__main__":
