@@ -806,6 +806,193 @@ def fetch_bbl_games() -> list[dict]:
     return games
 
 
+# ── Domestic European leagues via api-sports (live games + computed ratings) ──
+# Clean JSON feed with live score/quarter/status for leagues eurobasket/ESPN
+# don't cover live. Key comes from the APISPORTS_KEY env var (never committed).
+APISPORTS_KEY = os.environ.get("APISPORTS_KEY", "").strip()
+APISPORTS_BASE = "https://v1.basketball.api-sports.io"
+APISPORTS_SEASON = os.environ.get("APISPORTS_SEASON", "2025-2026")
+APISPORTS_LEAGUES = {                 # dashboard slug -> api-sports league id
+    "turkey-bsl": 104, "greece-gbl": 45, "italy-serie-a": 52,
+    "spain-liga-endesa": 117, "france-betclic": 2, "israel-winner": 51,
+    "lithuania-lkl": 60, "serbia-kls": 85,
+}
+APISPORTS_LIVE = {"Q1", "Q2", "Q3", "Q4", "OT", "HT", "BT", "ET"}
+APISPORTS_FINAL = {"FT", "AOT", "AET"}
+APISPORTS_RATINGS: dict = {}          # slug -> {team_name: {ppg, oppg, pace, gp}}
+_apisports_cache: dict = {}           # slug -> (dash_games, ts, ttl)
+
+
+def _apisports_get(path: str) -> dict:
+    req = Request(APISPORTS_BASE + path,
+                  headers={"x-apisports-key": APISPORTS_KEY, "Accept": "application/json"})
+    with urlopen(req, timeout=20) as r:
+        return json.loads(r.read())
+
+
+def _apisports_state(short: str) -> str:
+    if short in APISPORTS_FINAL:
+        return "post"
+    if short in APISPORTS_LIVE:
+        return "in"
+    return "pre"
+
+
+def _apisports_ratings_from(games: list) -> dict:
+    """Per-team ppg/oppg/pace from completed games (names match the games exactly)."""
+    agg = {}
+    for g in games:
+        if (g.get("status") or {}).get("short") not in APISPORTS_FINAL:
+            continue
+        sc = g.get("scores") or {}
+        hs = (sc.get("home") or {}).get("total")
+        as_ = (sc.get("away") or {}).get("total")
+        if hs is None or as_ is None:
+            continue
+        h = ((g.get("teams") or {}).get("home") or {}).get("name")
+        a = ((g.get("teams") or {}).get("away") or {}).get("name")
+        if not h or not a:
+            continue
+        agg.setdefault(h, [0, 0, 0]); agg.setdefault(a, [0, 0, 0])
+        agg[h][0] += hs; agg[h][1] += as_; agg[h][2] += 1
+        agg[a][0] += as_; agg[a][1] += hs; agg[a][2] += 1
+    out = {}
+    for name, (pf, pa, gp) in agg.items():
+        if gp:
+            ppg, oppg = pf / gp, pa / gp
+            out[name] = {"ppg": round(ppg, 1), "oppg": round(oppg, 1),
+                         "pace": round((ppg + oppg) / 2, 1), "gp": gp, "w": 0, "l": 0}
+    return out
+
+
+def _apisports_to_game(slug: str, g: dict) -> dict:
+    cfg = EURO_LEAGUES.get(slug, {})
+    st = g.get("status") or {}
+    short = st.get("short", "")
+    state = _apisports_state(short)
+    teams = g.get("teams") or {}
+    home = teams.get("home") or {}
+    away = teams.get("away") or {}
+    sc = g.get("scores") or {}
+    hs, as_ = sc.get("home") or {}, sc.get("away") or {}
+
+    def _i(x):
+        try:
+            return int(x or 0)
+        except (TypeError, ValueError):
+            return 0
+    h1 = (_i(hs.get("quarter_1")) + _i(hs.get("quarter_2"))) if state != "pre" else None
+    a1 = (_i(as_.get("quarter_1")) + _i(as_.get("quarter_2"))) if state != "pre" else None
+
+    start_epoch, time_str, sort_key = None, "TBD", 9999
+    ts = g.get("timestamp")
+    if ts:
+        try:
+            et_dt = datetime.fromtimestamp(ts, ET) if ET else datetime.fromtimestamp(ts)
+            _t = (et_dt.strftime("%#I:%M %p") if sys.platform == "win32"
+                  else et_dt.strftime("%-I:%M %p"))
+            base = (datetime.strptime(DATE_OVERRIDE, "%Y-%m-%d").date()
+                    if DATE_OVERRIDE else datetime.now(ET).date())
+            time_str = _t if et_dt.date() == base else (et_dt.strftime("%a ") + _t)
+            sort_key = et_dt.hour * 100 + et_dt.minute
+            start_epoch = float(ts)
+        except Exception:
+            pass
+    period = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "HT": 2, "BT": 2,
+              "FT": 4, "AOT": 4}.get(short, 0)
+    # api-sports "timer" is minutes (or M:SS) remaining in the period -> seconds,
+    # which is what project_game expects as clock_seconds for live time math.
+    clock_seconds = 0
+    timer = st.get("timer")
+    if timer not in (None, ""):
+        ts_s = str(timer).strip()
+        try:
+            if ":" in ts_s:
+                mm, ss = (ts_s.split(":") + ["0"])[:2]
+                clock_seconds = int(float(mm)) * 60 + int(float(ss))
+            else:
+                clock_seconds = int(float(ts_s)) * 60
+        except (ValueError, TypeError):
+            clock_seconds = 0
+    detail = ("Final" if state == "post"
+              else st.get("long") if state == "in"
+              else (g.get("week") or g.get("stage") or time_str))
+
+    def _abbr(nm):
+        return (nm or "")[:3].upper()
+    return {
+        "league_slug": slug,
+        "league_name": cfg.get("name", slug),
+        "league_short": cfg.get("short", ""),
+        "league_emoji": cfg.get("emoji", "\U0001F3C0"),
+        "league_accent": cfg.get("accent", "#888"),
+        "game_id": f"as_{g.get('id')}",
+        "state": state,
+        "clock_seconds": clock_seconds,
+        "display_clock": str(timer) if timer else "",
+        "period": period,
+        "status_detail": detail,
+        "away_name": away.get("name", "Away"),
+        "away_abbrev": _abbr(away.get("name")),
+        "away_score": _i(as_.get("total")),
+        "away_logo": away.get("logo", ""),
+        "home_name": home.get("name", "Home"),
+        "home_abbrev": _abbr(home.get("name")),
+        "home_score": _i(hs.get("total")),
+        "home_logo": home.get("logo", ""),
+        "away_1h_score": a1,
+        "home_1h_score": h1,
+        "neutral_site": False,
+        "start_time_str": time_str,
+        "start_time_sort": sort_key,
+        "start_epoch": start_epoch,
+        "source": "apisports",
+    }
+
+
+def fetch_apisports_league(slug: str, league_id: int) -> list[dict]:
+    """One league's windowed games + refreshed ratings. Adaptive cache: refresh
+    active leagues every 90s, idle (off-season) leagues hourly to save bandwidth."""
+    now = time.monotonic()
+    c = _apisports_cache.get(slug)
+    if c and (now - c[1]) < c[2]:
+        return c[0]
+    try:
+        allg = (_apisports_get(f"/games?league={league_id}&season={APISPORTS_SEASON}")
+                .get("response") or [])
+    except Exception as e:
+        print(f"  [WARN] api-sports {slug} failed: {e}", file=sys.stderr)
+        return c[0] if c else []
+
+    APISPORTS_RATINGS[slug] = _apisports_ratings_from(allg)
+    _, base_dt = get_date_str()
+    now_ts = base_dt.timestamp()
+    lo, hi = now_ts - 18 * 3600, now_ts + WINDOW_HOURS * 3600
+    out = [_apisports_to_game(slug, g) for g in allg
+           if g.get("timestamp") and lo <= g["timestamp"] <= hi]
+    # active if a game falls in a wider [-1d, +3d] band; else treat as off-season
+    active = any(g.get("timestamp") and (now_ts - 86400) <= g["timestamp"] <= (now_ts + 3 * 86400)
+                 for g in allg)
+    _apisports_cache[slug] = (out, now, 90 if active else 3600)
+    return out
+
+
+def fetch_apisports_games() -> list[dict]:
+    """All windowed api-sports domestic-league games (parallel across leagues)."""
+    if not APISPORTS_KEY:
+        return []
+    games = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(fetch_apisports_league, slug, lid): slug
+                for slug, lid in APISPORTS_LEAGUES.items()}
+        for fut in as_completed(futs):
+            try:
+                games += fut.result() or []
+            except Exception as e:
+                print(f"  [WARN] api-sports {futs[fut]}: {e}", file=sys.stderr)
+    return games
+
+
 def fetch_league_scoreboard(slug: str, date_str: str) -> list[dict]:
     """Fetch all games for a league on a given date."""
     url = f"{ESPN_BASE}/{slug}/scoreboard?dates={date_str}"
@@ -1009,7 +1196,10 @@ def _get_league_config(slug: str) -> dict:
 
 
 def _get_league_ratings(slug: str) -> dict:
-    """Get ratings dict from either RATINGS (ESPN) or EURO_RATINGS (eurobasket)."""
+    """Ratings dict, preferring api-sports (matches its game team names exactly),
+    then ESPN, then eurobasket standings."""
+    if APISPORTS_RATINGS.get(slug):
+        return APISPORTS_RATINGS[slug]
     if slug in RATINGS:
         return RATINGS[slug]
     return EURO_RATINGS.get(slug, {})
@@ -1944,6 +2134,16 @@ def _fetch_all_scoreboards_cached() -> tuple[list[dict], str | None]:
                 all_games.append(g)
     except Exception as e:
         errors.append(f"BBL: {e}")
+
+    # Domestic European leagues (Turkey, Greece, Italy, Spain, France, Israel,
+    # Lithuania, Serbia) — live games + ratings via api-sports
+    try:
+        for g in fetch_apisports_games():
+            if g["game_id"] not in seen:
+                seen.add(g["game_id"])
+                all_games.append(g)
+    except Exception as e:
+        errors.append(f"api-sports: {e}")
 
     error = "; ".join(errors) if errors else None
 
