@@ -738,8 +738,16 @@ def _bbl_to_game(g: dict) -> dict:
     hs, as_ = _i(res.get("homeTeamFinalScore")), _i(res.get("guestTeamFinalScore"))
     h1 = (_i(res.get("homeTeamQ1Score")) + _i(res.get("homeTeamQ2Score"))) if res else None
     a1 = (_i(res.get("guestTeamQ1Score")) + _i(res.get("guestTeamQ2Score"))) if res else None
-    period = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "E": 4}.get(g.get("gameProgress", ""), 0)
-    stage = (g.get("stage") or "").replace("_", " ").title()
+    prog = (g.get("gameProgress") or "").strip().upper()
+    period = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "HT": 2, "OT": 5, "E": 4}.get(prog, 0)
+    # Live BBL games: show the quarter ("Q2") on the clock-line, NOT the playoff
+    # round ("Finals") which reads as "Final". The official feed gives no clock.
+    if state == "post":
+        detail = "Final"
+    elif state == "in":
+        detail = "Halftime" if prog == "HT" else (prog or "Live")
+    else:
+        detail = time_str
 
     return {
         "league_slug": "germany-bbl",
@@ -752,7 +760,7 @@ def _bbl_to_game(g: dict) -> dict:
         "clock_seconds": 0,
         "display_clock": "",
         "period": period,
-        "status_detail": "Final" if state == "post" else (stage or time_str),
+        "status_detail": detail,
         "away_name": away.get("name", "Away"),
         "away_abbrev": away.get("tlc", ""),
         "away_score": as_,
