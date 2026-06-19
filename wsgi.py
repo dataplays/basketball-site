@@ -43,6 +43,7 @@ DASH_LABELS = {
     "wcbb": "Women's College (WCBB)",
     "nbl": "Australian NBL",
     "intl": "International",
+    "big3": "BIG3 (3-on-3)",
 }
 # Signature accent per dashboard (matches each dashboard's own header colour),
 # used to colour-code the landing-page cards. Falls back to blue.
@@ -53,6 +54,7 @@ DASH_COLORS = {
     "wcbb": "#e040a0",
     "nbl": "#fdcb6e",
     "intl": "#00b894",
+    "big3": "#e8112d",
     "median": "#4fc3f7",
 }
 TOOL_LABELS = {
@@ -413,8 +415,8 @@ start_scheduler()
 # indicator are injected at the WSGI layer so all dashboards stay in sync
 # without editing each one. The nav's active tab is derived from the mount path.
 NAV_SHORT = {"nba": "NBA", "wnba": "WNBA", "cbb": "CBB", "wcbb": "WCBB",
-             "nbl": "NBL", "intl": "Intl", "median": "Median"}
-NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "median"]
+             "nbl": "NBL", "intl": "Intl", "big3": "BIG3", "median": "Median"}
+NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "big3", "median"]
 
 INJECT_CSS = (
     ".bb-nav{display:flex;gap:4px;overflow-x:auto;background:#0a1218;"
