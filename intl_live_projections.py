@@ -894,6 +894,22 @@ APISPORTS_LEAGUES = {                 # dashboard slug -> api-sports league id
     "turkey-bsl": 104, "greece-gbl": 45, "italy-serie-a": 52,
     "spain-liga-endesa": 117, "france-betclic": 2, "israel-winner": 51,
     "lithuania-lkl": 60, "serbia-kls": 85,
+    # added Jun 2026 — other pro leagues active now (configs in EXTRA_APISPORTS_LEAGUES)
+    "pr-bsn": 76, "ph-mpbl": 426, "ca-cebl": 222, "nz-nbl": 66,
+    "ar-liga-a": 18, "pl-ebl": 72, "id-ibl": 139, "do-lnb": 380,
+}
+# Non-eurobasket leagues: games + ratings come only from api-sports (so they
+# show as games but not in the eurobasket standings section). "season" overrides
+# the default for leagues that run on a calendar year ("2026") vs a split season.
+EXTRA_APISPORTS_LEAGUES = {
+    "pr-bsn":    {"name": "BSN (Puerto Rico)",           "short": "BSN",    "emoji": "\U0001F1F5\U0001F1F7", "accent": "#d62828", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "ph-mpbl":   {"name": "MPBL (Philippines)",          "short": "MPBL",   "emoji": "\U0001F1F5\U0001F1ED", "accent": "#0353a4", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "ca-cebl":   {"name": "CEBL (Canada)",               "short": "CEBL",   "emoji": "\U0001F1E8\U0001F1E6", "accent": "#e01e37", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "nz-nbl":    {"name": "NBL (New Zealand)",           "short": "NZ NBL", "emoji": "\U0001F1F3\U0001F1FF", "accent": "#118ab2", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "ar-liga-a": {"name": "Liga A (Argentina)",          "short": "ARG",    "emoji": "\U0001F1E6\U0001F1F7", "accent": "#4ea8de", "season": "2025-2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "pl-ebl":    {"name": "Energa Basket Liga (Poland)", "short": "PLK",    "emoji": "\U0001F1F5\U0001F1F1", "accent": "#e63946", "season": "2025-2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "id-ibl":    {"name": "IBL (Indonesia)",             "short": "IBL",    "emoji": "\U0001F1EE\U0001F1E9", "accent": "#ef476f", "season": "2025-2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "do-lnb":    {"name": "LNB (Dominican Rep.)",        "short": "DOM",    "emoji": "\U0001F1E9\U0001F1F4", "accent": "#168aad", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
 }
 APISPORTS_LIVE = {"Q1", "Q2", "Q3", "Q4", "OT", "HT", "BT", "ET"}
 APISPORTS_FINAL = {"FT", "AOT", "AET"}
@@ -944,7 +960,7 @@ def _apisports_ratings_from(games: list) -> dict:
 
 
 def _apisports_to_game(slug: str, g: dict) -> dict:
-    cfg = EURO_LEAGUES.get(slug, {})
+    cfg = _get_league_config(slug)
     st = g.get("status") or {}
     short = st.get("short", "")
     state = _apisports_state(short)
@@ -1036,7 +1052,8 @@ def fetch_apisports_league(slug: str, league_id: int) -> list[dict]:
     if c and (now - c[1]) < c[2]:
         return c[0]
     try:
-        allg = (_apisports_get(f"/games?league={league_id}&season={APISPORTS_SEASON}")
+        season = (_get_league_config(slug) or {}).get("season") or APISPORTS_SEASON
+        allg = (_apisports_get(f"/games?league={league_id}&season={season}")
                 .get("response") or [])
     except Exception as e:
         print(f"  [WARN] api-sports {slug} failed: {e}", file=sys.stderr)
@@ -1270,7 +1287,9 @@ def _get_league_config(slug: str) -> dict:
     """Get league config from either LEAGUES or EURO_LEAGUES."""
     if slug in LEAGUES:
         return LEAGUES[slug]
-    return EURO_LEAGUES.get(slug, {})
+    if slug in EURO_LEAGUES:
+        return EURO_LEAGUES[slug]
+    return EXTRA_APISPORTS_LEAGUES.get(slug, {})
 
 
 def _get_league_ratings(slug: str) -> dict:
