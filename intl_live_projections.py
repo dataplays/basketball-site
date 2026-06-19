@@ -29,7 +29,7 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -204,33 +204,43 @@ RATINGS_LOADED_AT: datetime | None = None
 _euro_session: _requests.Session | None = None
 
 
+_euro_session_lock = threading.Lock()
+
+
 def _get_euro_session() -> _requests.Session:
-    """Get an authenticated eurobasket.com session, logging in if needed."""
+    """Get an authenticated eurobasket.com session, logging in if needed.
+
+    Thread-safe: a single login is shared across the parallel league loaders,
+    so concurrent workers don't each trigger their own login round-trip."""
     global _euro_session
-    if _euro_session is not None:
-        # Check if still valid (has cookies)
-        if any(c.name == "PREMIUM" for c in _euro_session.cookies):
+    with _euro_session_lock:
+        if _euro_session is not None and any(
+            c.name == "PREMIUM" for c in _euro_session.cookies
+        ):
             return _euro_session
 
-    s = _requests.Session()
-    s.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-    })
-    s.post(EUROBASKET_LOGIN_URL, data={
-        "email": EUROBASKET_EMAIL,
-        "pwd": EUROBASKET_PWD,
-        "B1": "Login",
-        "Referal": "",
-    }, timeout=15, allow_redirects=True)
+        s = _requests.Session()
+        s.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        })
+        try:
+            s.post(EUROBASKET_LOGIN_URL, data={
+                "email": EUROBASKET_EMAIL,
+                "pwd": EUROBASKET_PWD,
+                "B1": "Login",
+                "Referal": "",
+            }, timeout=15, allow_redirects=True)
+        except Exception as e:
+            print(f"    [WARN] Eurobasket login error: {e}")
 
-    cookie_count = len(list(s.cookies))
-    if cookie_count > 0:
-        print(f"    Eurobasket login OK ({cookie_count} cookies)")
-    else:
-        print("    [WARN] Eurobasket login may have failed (0 cookies)")
+        cookie_count = len(list(s.cookies))
+        if cookie_count > 0:
+            print(f"    Eurobasket login OK ({cookie_count} cookies)")
+        else:
+            print("    [WARN] Eurobasket login may have failed (0 cookies)")
 
-    _euro_session = s
-    return s
+        _euro_session = s
+        return s
 
 
 def fetch_euro_standings(section_id: int, league_num: int, is_cup: int) -> list[dict]:
@@ -416,16 +426,40 @@ def load_league_ratings(slug: str) -> dict[str, dict]:
 
 
 def load_all_ratings() -> None:
-    """Load ratings for all configured leagues (ESPN + eurobasket)."""
+    """Load ratings for all configured leagues (ESPN + eurobasket), in parallel.
+
+    Each league is independent, so they're fetched concurrently — one slow or
+    unreachable source no longer serializes behind the others (this is what
+    used to make the dashboard take minutes to load). Runs off the request
+    path; see ensure_ratings_loading()."""
     global RATINGS, EURO_RATINGS, RATINGS_LOADED_AT
 
-    print("Loading ESPN league ratings...")
-    for slug in LEAGUES:
-        RATINGS[slug] = load_league_ratings(slug)
+    print("Loading ESPN league ratings (parallel)...")
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = {ex.submit(load_league_ratings, slug): slug for slug in LEAGUES}
+        for fut in as_completed(futs):
+            slug = futs[fut]
+            try:
+                RATINGS[slug] = fut.result()
+            except Exception as e:
+                RATINGS[slug] = {}
+                print(f"  [WARN] ESPN ratings for {slug} failed: {e}")
 
-    print("\nLoading European league ratings from eurobasket.com...")
-    for key, cfg in EURO_LEAGUES.items():
-        EURO_RATINGS[key] = load_euro_league_ratings(key, cfg)
+    print("Loading European league ratings from eurobasket.com (parallel)...")
+    try:
+        _get_euro_session()      # prime the shared login once before fan-out
+    except Exception as e:
+        print(f"  [WARN] eurobasket session prime failed: {e}")
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(load_euro_league_ratings, key, cfg): key
+                for key, cfg in EURO_LEAGUES.items()}
+        for fut in as_completed(futs):
+            key = futs[fut]
+            try:
+                EURO_RATINGS[key] = fut.result()
+            except Exception as e:
+                EURO_RATINGS[key] = {}
+                print(f"  [WARN] eurobasket ratings for {key} failed: {e}")
 
     RATINGS_LOADED_AT = datetime.now(ET)
     total_espn = sum(len(v) for v in RATINGS.values())
@@ -433,6 +467,36 @@ def load_all_ratings() -> None:
     print(f"\nRatings loaded at {RATINGS_LOADED_AT.strftime('%I:%M %p ET')}.")
     print(f"  ESPN: {total_espn} teams across {len(RATINGS)} leagues")
     print(f"  Eurobasket: {total_euro} teams across {len(EURO_RATINGS)} leagues")
+
+
+# Background ratings loading so the dashboard never blocks a page load on the
+# (multi-second) league scrape. The page renders immediately; projections fall
+# back to league-average defaults until the load finishes, then sharpen on the
+# next 30s AJAX refresh.
+_ratings_thread = None
+_ratings_thread_lock = threading.Lock()
+
+
+def ensure_ratings_loading() -> None:
+    """Start the ratings load in the background once, without blocking."""
+    global _ratings_thread
+    if RATINGS_LOADED_AT is not None:
+        return
+    with _ratings_thread_lock:
+        if RATINGS_LOADED_AT is not None:
+            return
+        if _ratings_thread is not None and _ratings_thread.is_alive():
+            return
+
+        def _runner():
+            try:
+                load_all_ratings()
+            except Exception as e:
+                print(f"[ratings] background load failed: {e}")
+
+        _ratings_thread = threading.Thread(target=_runner, name="intl-ratings",
+                                           daemon=True)
+        _ratings_thread.start()
 
 
 # ── Euroleague API: European league game schedules ──
@@ -1702,13 +1766,16 @@ def _fetch_all_scoreboards_cached() -> tuple[list[dict], str | None]:
     all_games = []
     errors = []
 
-    # ESPN leagues (G League, NBL)
-    for slug in LEAGUES:
-        try:
-            games = fetch_league_scoreboard(slug, date_str)
-            all_games.extend(games)
-        except Exception as e:
-            errors.append(f"{LEAGUES[slug]['name']}: {e}")
+    # ESPN leagues — fetched concurrently so one slow league can't stall the poll
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {ex.submit(fetch_league_scoreboard, slug, date_str): slug
+                for slug in LEAGUES}
+        for fut in as_completed(futs):
+            slug = futs[fut]
+            try:
+                all_games.extend(fut.result())
+            except Exception as e:
+                errors.append(f"{LEAGUES[slug]['name']}: {e}")
 
     # Euroleague API (EuroLeague, EuroCup)
     try:
@@ -1824,8 +1891,7 @@ def _build_euro_league_display() -> list[dict]:
 
 @app.route("/")
 def index():
-    if not RATINGS_LOADED_AT:
-        load_all_ratings()
+    ensure_ratings_loading()
 
     live, upcoming, completed, date_display, error, league_summary, league_count = fetch_and_project()
     euro_leagues = _build_euro_league_display()
@@ -1853,8 +1919,7 @@ def index():
 
 @app.route("/api/games")
 def api_games():
-    if not RATINGS_LOADED_AT:
-        load_all_ratings()
+    ensure_ratings_loading()
 
     live, upcoming, completed, _, error, _, _ = fetch_and_project()
 
@@ -1872,11 +1937,12 @@ def api_games():
 
 @app.route("/refresh")
 def refresh_ratings():
-    """Re-fetch ratings for all leagues."""
-    try:
-        load_all_ratings()
-    except Exception as e:
-        print(f"  Refresh failed: {e}")
+    """Trigger a fresh ratings reload in the background (non-blocking)."""
+    global RATINGS_LOADED_AT, _ratings_thread
+    with _ratings_thread_lock:
+        RATINGS_LOADED_AT = None
+        _ratings_thread = None
+    ensure_ratings_loading()
     return redirect(url_for("index"))
 
 
