@@ -34,7 +34,7 @@ import re
 import sys
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -319,10 +319,11 @@ def fetch_live_scoreboard(date_str: str) -> list[dict]:
         utc_str = event["date"]
         utc_dt = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
         et_dt = utc_dt.astimezone(ET)
-        time_str = (
-            et_dt.strftime("%-I:%M %p") if sys.platform != "win32"
-            else et_dt.strftime("%#I:%M %p")
-        )
+        _t = (et_dt.strftime("%-I:%M %p") if sys.platform != "win32"
+              else et_dt.strftime("%#I:%M %p"))
+        _base_date = (datetime.strptime(DATE_OVERRIDE, "%Y-%m-%d").date()
+                      if DATE_OVERRIDE else datetime.now(ET).date())
+        time_str = _t if et_dt.date() == _base_date else (et_dt.strftime("%a ") + _t)
 
         # 1H score = Q1 + Q2 (WNBA uses 4 × 10-min quarters)
         away_q1 = _get_linescore(away, 0)
@@ -352,6 +353,7 @@ def fetch_live_scoreboard(date_str: str) -> list[dict]:
             "home_1h_score": home_1h,
             "start_time_str": time_str,
             "start_time_sort": et_dt.hour * 100 + et_dt.minute,
+            "start_epoch": et_dt.timestamp(),
         }
         games.append(game)
 
@@ -1572,10 +1574,15 @@ _cache: dict = {
 CACHE_TTL = 20
 
 
+# Show every game tipping off within this rolling window (not just "today").
+WINDOW_HOURS = 48
+WINDOW_DAYS = 3          # calendar days to fetch to cover a rolling 48h window
+
+
 def get_date_str() -> tuple[str, datetime]:
-    """Get the target date as YYYYMMDD string and datetime."""
+    """Get the base date as YYYYMMDD string and an ET-aware datetime."""
     if DATE_OVERRIDE:
-        dt = datetime.strptime(DATE_OVERRIDE, "%Y-%m-%d")
+        dt = datetime.strptime(DATE_OVERRIDE, "%Y-%m-%d").replace(tzinfo=ET)
     else:
         dt = datetime.now(ET)
     return dt.strftime("%Y%m%d"), dt
@@ -1587,10 +1594,16 @@ def _fetch_scoreboard_cached() -> tuple[list[dict], str | None]:
         if now - _cache["fetched_at"] < CACHE_TTL and _cache["games"]:
             return _cache["games"], _cache["error"]
 
-    date_str, _ = get_date_str()
+    _, base_dt = get_date_str()
     error = None
+    games, seen = [], set()
     try:
-        games = fetch_live_scoreboard(date_str)
+        for _i in range(WINDOW_DAYS):       # fetch enough calendar days to span 48h
+            ds = (base_dt + timedelta(days=_i)).strftime("%Y%m%d")
+            for g in fetch_live_scoreboard(ds):
+                if g["game_id"] not in seen:
+                    seen.add(g["game_id"])
+                    games.append(g)
     except Exception as e:
         error = f"ESPN API error: {e}. Showing last known data."
         with _cache_lock:
@@ -1629,13 +1642,16 @@ def fetch_and_project() -> tuple[list[dict], list[dict], list[dict], str, str | 
         key=lambda g: g["time_elapsed"],
         reverse=True,
     )
+    _, _base_dt = get_date_str()
+    _cutoff = _base_dt.timestamp() + WINDOW_HOURS * 3600
     upcoming = sorted(
-        [g for g in projected if g["state"] == "pre"],
-        key=lambda g: g["start_time_sort"],
+        [g for g in projected if g["state"] == "pre"
+         and g.get("start_epoch", 0) <= _cutoff],
+        key=lambda g: g.get("start_epoch", g["start_time_sort"]),
     )
     completed = sorted(
         [g for g in projected if g["state"] == "post"],
-        key=lambda g: g["start_time_sort"],
+        key=lambda g: g.get("start_epoch", g["start_time_sort"]),
         reverse=True,
     )
 

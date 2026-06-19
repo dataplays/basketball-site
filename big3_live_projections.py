@@ -43,7 +43,7 @@ import random
 import sys
 import threading
 import time
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from statistics import median
 
 try:
@@ -60,6 +60,7 @@ import requests
 TARGET_SCORE = 50          # first to 50 ...
 WIN_BY = 2                 # ... and must lead by 2 (no overtime)
 HALF_SCORE = 25            # halftime triggers when a team reaches 25 (cumulative)
+WINDOW_HOURS = 48          # "upcoming" = any game tipping within this rolling window
 
 # Average points per possession in the BIG3 (tuned in --selftest so that an
 # even matchup yields a realistic ~50-43 final and ~90-ish total).
@@ -546,8 +547,28 @@ def build_payload(year=SEASON_YEAR, date_override=None, sims=DEFAULT_SIMS):
     # de-dupe live games already in the focus list
     extra_live = [g for g in live if g["date_et"] != focus]
 
-    upcoming = sorted([g for g in focus_games if g["status"] == "pre"],
-                      key=lambda g: g["tip_et"] or datetime.max.replace(tzinfo=ET) if ET else datetime.max)
+    # Upcoming = every pre-game tipping within the next 48h (across game days).
+    # BIG3 plays ~weekly, so if nothing is within the window fall back to the
+    # focus day's slate — the page should never show fewer games than before.
+    if ET is not None:
+        base_dt = (datetime.now(ET) if not date_override
+                   else datetime(today.year, today.month, today.day, tzinfo=ET))
+    else:
+        base_dt = datetime.now()
+    cutoff = base_dt + timedelta(hours=WINDOW_HOURS)
+    window_pre = [g for g in games if g["status"] == "pre" and g["tip_et"]
+                  and base_dt <= g["tip_et"] <= cutoff]
+    if window_pre:
+        upcoming = sorted(window_pre, key=lambda g: g["tip_et"])
+    else:
+        upcoming = sorted([g for g in focus_games if g["status"] == "pre"],
+                          key=lambda g: g["tip_et"] or base_dt)
+
+    # Day-prefix the tip label for upcoming games that aren't on the focus day.
+    for g in upcoming:
+        if g["tip_et"] and g["date_et"] != today.isoformat():
+            g["tip_str"] = g["tip_et"].strftime("%a ") + g["tip_str"]
+
     live_focus = [g for g in focus_games if g["status"] == "live"] + extra_live
     final = [g for g in focus_games if g["status"] == "final"]
 
@@ -845,7 +866,7 @@ function section(id,title,games,live){
 }
 async function load(){
   try{
-    const r=await fetch('/api/games',{cache:'no-store'});
+    const r=await fetch('api/games',{cache:'no-store'});
     const d=await r.json();
     document.getElementById('season').textContent='Season '+ (d.season-2017) +' · '+d.season;
     document.getElementById('dayttl').textContent =

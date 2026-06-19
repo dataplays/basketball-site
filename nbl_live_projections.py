@@ -21,7 +21,7 @@ import sys
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -370,10 +370,11 @@ def fetch_scoreboard(date_str: str) -> list[dict]:
         utc_dt = datetime.fromisoformat(utc_str.replace("Z", "+00:00"))
         et_dt = utc_dt.astimezone(ET)
         aest_dt = utc_dt.astimezone(AEST)
-        time_str_et = (
-            et_dt.strftime("%#I:%M %p") if sys.platform == "win32"
-            else et_dt.strftime("%-I:%M %p")
-        )
+        _t_et = (et_dt.strftime("%#I:%M %p") if sys.platform == "win32"
+                 else et_dt.strftime("%-I:%M %p"))
+        _base_date = (datetime.strptime(DATE_OVERRIDE, "%Y-%m-%d").date()
+                      if DATE_OVERRIDE else datetime.now(ET).date())
+        time_str_et = _t_et if et_dt.date() == _base_date else (et_dt.strftime("%a ") + _t_et)
         time_str_aest = (
             aest_dt.strftime("%#I:%M %p") if sys.platform == "win32"
             else aest_dt.strftime("%-I:%M %p")
@@ -410,6 +411,7 @@ def fetch_scoreboard(date_str: str) -> list[dict]:
             "start_time_str": time_str_et,
             "start_time_aest": time_str_aest,
             "start_time_sort": et_dt.hour * 100 + et_dt.minute,
+            "start_epoch": et_dt.timestamp(),
         }
         games.append(game)
 
@@ -1182,9 +1184,14 @@ _cache: dict = {"games": [], "fetched_at": 0.0, "error": None}
 CACHE_TTL = 20
 
 
+# Show every game tipping off within this rolling window (not just "today").
+WINDOW_HOURS = 48
+WINDOW_DAYS = 3          # calendar days to fetch to cover a rolling 48h window
+
+
 def get_date_str() -> tuple[str, datetime]:
     if DATE_OVERRIDE:
-        dt = datetime.strptime(DATE_OVERRIDE, "%Y-%m-%d")
+        dt = datetime.strptime(DATE_OVERRIDE, "%Y-%m-%d").replace(tzinfo=ET)
     else:
         dt = datetime.now(ET)
     return dt.strftime("%Y%m%d"), dt
@@ -1196,10 +1203,16 @@ def _fetch_scoreboard_cached() -> tuple[list[dict], str | None]:
         if now - _cache["fetched_at"] < CACHE_TTL and _cache["games"]:
             return _cache["games"], _cache["error"]
 
-    date_str, _ = get_date_str()
+    _, base_dt = get_date_str()
     error = None
+    games, seen = [], set()
     try:
-        games = fetch_scoreboard(date_str)
+        for _i in range(WINDOW_DAYS):       # fetch enough calendar days to span 48h
+            ds = (base_dt + timedelta(days=_i)).strftime("%Y%m%d")
+            for g in fetch_scoreboard(ds):
+                if g["game_id"] not in seen:
+                    seen.add(g["game_id"])
+                    games.append(g)
     except Exception as e:
         error = str(e)
         games = _cache.get("games", [])
@@ -1243,9 +1256,11 @@ def fetch_and_project() -> tuple[list, list, list, str, str | None]:
         for g in projected:
             g["props"] = []
 
+    _, _base_dt = get_date_str()
+    _cutoff = _base_dt.timestamp() + WINDOW_HOURS * 3600
     live = sorted([g for g in projected if g["state"] == "in"], key=lambda g: g["time_elapsed"], reverse=True)
-    upcoming = sorted([g for g in projected if g["state"] == "pre"], key=lambda g: g["start_time_sort"])
-    completed = sorted([g for g in projected if g["state"] == "post"], key=lambda g: g["start_time_sort"], reverse=True)
+    upcoming = sorted([g for g in projected if g["state"] == "pre" and g.get("start_epoch", 0) <= _cutoff], key=lambda g: g.get("start_epoch", g["start_time_sort"]))
+    completed = sorted([g for g in projected if g["state"] == "post"], key=lambda g: g.get("start_epoch", g["start_time_sort"]), reverse=True)
 
     return live, upcoming, completed, date_display, error
 
