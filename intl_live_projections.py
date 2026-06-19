@@ -676,6 +676,136 @@ def _get_linescore(competitor: dict, period_index: int) -> int | None:
     return None
 
 
+# ── German BBL: official-site live data (domestic league, not on Euroleague API) ──
+# easycredit-bbl.de server-renders full game data (teams, live + per-quarter
+# scores, status, scheduledTime) into its page JSON — no API token needed.
+BBL_HOME_URL = "https://www.easycredit-bbl.de/"
+_bbl_cache: dict = {"games": [], "ts": 0.0}
+_BBL_CACHE_TTL = 25  # seconds
+
+
+def _bbl_find_games(obj) -> list[dict]:
+    """Recursively collect game objects (have homeTeam + guestTeam + scheduledTime)."""
+    out = []
+    if isinstance(obj, dict):
+        if "homeTeam" in obj and "guestTeam" in obj and obj.get("scheduledTime"):
+            out.append(obj)
+        else:
+            for v in obj.values():
+                out += _bbl_find_games(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            out += _bbl_find_games(v)
+    return out
+
+
+def _bbl_state(status, progress) -> str:
+    s = (status or "").upper()
+    if s in ("OFFICIAL", "FINAL", "ENDED", "FINISHED") or progress == "E":
+        return "post"
+    if s in ("PRE", "SCHEDULED", "UPCOMING", "PLANNED", "PREVIEW", ""):
+        return "pre"
+    return "in"   # LIVE / running
+
+
+def _bbl_to_game(g: dict) -> dict:
+    cfg = EURO_LEAGUES.get("germany-bbl", {})
+    home = g.get("homeTeam", {}) or {}
+    away = g.get("guestTeam", {}) or {}
+    res = g.get("result") or {}
+    state = _bbl_state(g.get("status"), g.get("gameProgress"))
+
+    start_epoch, time_str, sort_key = None, "TBD", 9999
+    st = g.get("scheduledTime")
+    if st:
+        try:
+            et_dt = datetime.fromisoformat(st.replace("Z", "+00:00")).astimezone(ET)
+            _t = (et_dt.strftime("%#I:%M %p") if sys.platform == "win32"
+                  else et_dt.strftime("%-I:%M %p"))
+            base = (datetime.strptime(DATE_OVERRIDE, "%Y-%m-%d").date()
+                    if DATE_OVERRIDE else datetime.now(ET).date())
+            time_str = _t if et_dt.date() == base else (et_dt.strftime("%a ") + _t)
+            sort_key = et_dt.hour * 100 + et_dt.minute
+            start_epoch = et_dt.timestamp()
+        except Exception:
+            pass
+
+    def _i(x):
+        try:
+            return int(x or 0)
+        except (TypeError, ValueError):
+            return 0
+    hs, as_ = _i(res.get("homeTeamFinalScore")), _i(res.get("guestTeamFinalScore"))
+    h1 = (_i(res.get("homeTeamQ1Score")) + _i(res.get("homeTeamQ2Score"))) if res else None
+    a1 = (_i(res.get("guestTeamQ1Score")) + _i(res.get("guestTeamQ2Score"))) if res else None
+    period = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "E": 4}.get(g.get("gameProgress", ""), 0)
+    stage = (g.get("stage") or "").replace("_", " ").title()
+
+    return {
+        "league_slug": "germany-bbl",
+        "league_name": cfg.get("name", "BBL (Germany)"),
+        "league_short": cfg.get("short", "BBL"),
+        "league_emoji": cfg.get("emoji", "\U0001F1E9\U0001F1EA"),
+        "league_accent": cfg.get("accent", "#d35400"),
+        "game_id": f"bbl_{g.get('id') or g.get('sourceId')}",
+        "state": state,
+        "clock_seconds": 0,
+        "display_clock": "",
+        "period": period,
+        "status_detail": "Final" if state == "post" else (stage or time_str),
+        "away_name": away.get("name", "Away"),
+        "away_abbrev": away.get("tlc", ""),
+        "away_score": as_,
+        "away_logo": away.get("logoUrl", ""),
+        "home_name": home.get("name", "Home"),
+        "home_abbrev": home.get("tlc", ""),
+        "home_score": hs,
+        "home_logo": home.get("logoUrl", ""),
+        "away_1h_score": a1,
+        "home_1h_score": h1,
+        "neutral_site": False,
+        "start_time_str": time_str,
+        "start_time_sort": sort_key,
+        "start_epoch": start_epoch,
+        "source": "bbl_official",
+    }
+
+
+def fetch_bbl_games() -> list[dict]:
+    """German BBL games from the official site's embedded SSR data (no token).
+
+    Keeps only games tipping within roughly [now-18h, now+WINDOW_HOURS] so the
+    completed list isn't flooded with weeks-old results."""
+    now = time.monotonic()
+    if _bbl_cache["games"] and (now - _bbl_cache["ts"]) < _BBL_CACHE_TTL:
+        return _bbl_cache["games"]
+    games = []
+    try:
+        r = _requests.get(BBL_HOME_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        m = re.search(r'__NEXT_DATA__[^>]*>(.*?)</script>', r.text, re.DOTALL)
+        if m:
+            pp = json.loads(m.group(1)).get("props", {}).get("pageProps", {})
+            _, base_dt = get_date_str()
+            now_ts = base_dt.timestamp()
+            lo, hi = now_ts - 18 * 3600, now_ts + WINDOW_HOURS * 3600
+            seen = set()
+            for raw in _bbl_find_games(pp):
+                gid = str(raw.get("id") or raw.get("sourceId") or "")
+                if not gid or gid in seen:
+                    continue
+                seen.add(gid)
+                gm = _bbl_to_game(raw)
+                se = gm.get("start_epoch")
+                if se is None or lo <= se <= hi:
+                    games.append(gm)
+    except Exception as e:
+        print(f"  [WARN] BBL fetch failed: {e}", file=sys.stderr)
+        return _bbl_cache["games"]
+    _bbl_cache["games"] = games
+    _bbl_cache["ts"] = now
+    return games
+
+
 def fetch_league_scoreboard(slug: str, date_str: str) -> list[dict]:
     """Fetch all games for a league on a given date."""
     url = f"{ESPN_BASE}/{slug}/scoreboard?dates={date_str}"
@@ -1805,6 +1935,15 @@ def _fetch_all_scoreboards_cached() -> tuple[list[dict], str | None]:
                     all_games.append(g)
         except Exception as e:
             errors.append(f"Euroleague API: {e}")
+
+    # German BBL — official-site live data (domestic league, not on Euroleague API)
+    try:
+        for g in fetch_bbl_games():
+            if g["game_id"] not in seen:
+                seen.add(g["game_id"])
+                all_games.append(g)
+    except Exception as e:
+        errors.append(f"BBL: {e}")
 
     error = "; ".join(errors) if errors else None
 
