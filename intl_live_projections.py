@@ -739,13 +739,42 @@ def _bbl_to_game(g: dict) -> dict:
     h1 = (_i(res.get("homeTeamQ1Score")) + _i(res.get("homeTeamQ2Score"))) if res else None
     a1 = (_i(res.get("guestTeamQ1Score")) + _i(res.get("guestTeamQ2Score"))) if res else None
     prog = (g.get("gameProgress") or "").strip().upper()
-    period = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "HT": 2, "OT": 5, "E": 4}.get(prog, 0)
-    # Live BBL games: show the quarter ("Q2") on the clock-line, NOT the playoff
-    # round ("Finals") which reads as "Final". The official feed gives no clock.
+    _qm = re.match(r"Q(\d)", prog)          # handles "Q2" and "Q2_BREAK"
+    if _qm:
+        period = int(_qm.group(1))
+    elif prog == "HT":
+        period = 2
+    elif prog.startswith("OT"):
+        period = 5
+    elif prog == "E":
+        period = 4
+    else:
+        period = 0
+    # Live clock: the per-game page's gameTime is "HH:MM:SS" remaining in the
+    # current period (counts down). The homepage summary omits it.
+    clock_seconds, clock_str = 0, ""
+    gt = g.get("gameTime")
+    if gt and state == "in":
+        try:
+            parts = [int(p) for p in str(gt).split(":")]
+            while len(parts) < 3:
+                parts.insert(0, 0)
+            clock_seconds = parts[0] * 3600 + parts[1] * 60 + parts[2]
+            cm, cs = divmod(clock_seconds, 60)
+            clock_str = f"{cm}:{cs:02d}"
+        except (ValueError, TypeError):
+            clock_seconds, clock_str = 0, ""
+    # Live clock-line: quarter + running clock ("Q2 0:46"); never the playoff round.
     if state == "post":
         detail = "Final"
     elif state == "in":
-        detail = "Halftime" if prog == "HT" else (prog or "Live")
+        if prog == "HT":
+            base = "Halftime"
+        elif "BREAK" in prog:
+            base = "Break"
+        else:
+            base = prog or "Live"
+        detail = f"{base} {clock_str}" if (clock_seconds > 0 and clock_str) else base
     else:
         detail = time_str
 
@@ -757,8 +786,8 @@ def _bbl_to_game(g: dict) -> dict:
         "league_accent": cfg.get("accent", "#d35400"),
         "game_id": f"bbl_{g.get('id') or g.get('sourceId')}",
         "state": state,
-        "clock_seconds": 0,
-        "display_clock": "",
+        "clock_seconds": clock_seconds,
+        "display_clock": clock_str,
         "period": period,
         "status_detail": detail,
         "away_name": away.get("name", "Away"),
@@ -779,11 +808,12 @@ def _bbl_to_game(g: dict) -> dict:
     }
 
 
-def fetch_bbl_games() -> list[dict]:
+def _bbl_window_games() -> list[dict]:
     """German BBL games from the official site's embedded SSR data (no token).
 
     Keeps only games tipping within roughly [now-18h, now+WINDOW_HOURS] so the
-    completed list isn't flooded with weeks-old results."""
+    completed list isn't flooded with weeks-old results. Live clocks are added
+    by fetch_bbl_games() via each game's per-game page."""
     now = time.monotonic()
     if _bbl_cache["games"] and (now - _bbl_cache["ts"]) < _BBL_CACHE_TTL:
         return _bbl_cache["games"]
@@ -812,6 +842,46 @@ def fetch_bbl_games() -> list[dict]:
     _bbl_cache["games"] = games
     _bbl_cache["ts"] = now
     return games
+
+
+_bbl_game_cache: dict = {}     # game_id -> (dash_game, ts) for live per-game clocks
+_BBL_GAME_TTL = 20
+
+
+def _bbl_live_detail(game_id: str):
+    """Fetch one BBL game's page for the live clock (gameTime). Per-game cached."""
+    gid = str(game_id).replace("bbl_", "")
+    now = time.monotonic()
+    c = _bbl_game_cache.get(gid)
+    if c and (now - c[1]) < _BBL_GAME_TTL:
+        return c[0]
+    dash = None
+    try:
+        r = _requests.get(f"https://www.easycredit-bbl.de/spiele/{gid}",
+                          headers={"User-Agent": "Mozilla/5.0"}, timeout=12)
+        m = re.search(r'__NEXT_DATA__[^>]*>(.*?)</script>', r.text, re.DOTALL)
+        if m:
+            igd = (json.loads(m.group(1)).get("props", {})
+                   .get("pageProps", {}).get("initialGameData"))
+            if igd:
+                dash = _bbl_to_game(igd)
+    except Exception as e:
+        print(f"  [WARN] BBL game {gid} refresh failed: {e}", file=sys.stderr)
+        return c[0] if c else None
+    _bbl_game_cache[gid] = (dash, now)
+    return dash
+
+
+def fetch_bbl_games() -> list[dict]:
+    """Windowed BBL games; live games are refreshed from their per-game page so
+    the clock-line shows the running quarter clock (e.g. "Q2 0:46")."""
+    out = []
+    for gm in _bbl_window_games():
+        if gm["state"] == "in":
+            out.append(_bbl_live_detail(gm["game_id"]) or gm)
+        else:
+            out.append(gm)
+    return out
 
 
 # ── Domestic European leagues via api-sports (live games + computed ratings) ──
