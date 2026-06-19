@@ -918,10 +918,19 @@ _apisports_cache: dict = {}           # slug -> (dash_games, ts, ttl)
 
 
 def _apisports_get(path: str) -> dict:
-    req = Request(APISPORTS_BASE + path,
-                  headers={"x-apisports-key": APISPORTS_KEY, "Accept": "application/json"})
-    with urlopen(req, timeout=20) as r:
-        return json.loads(r.read())
+    # api-sports signals a rate-limited/transient request as a 200 with a
+    # non-empty "errors" field (not an HTTP error). When many leagues fetch at
+    # once a burst can trip it, so back off briefly and retry.
+    d = {}
+    for _attempt in range(3):
+        req = Request(APISPORTS_BASE + path,
+                      headers={"x-apisports-key": APISPORTS_KEY, "Accept": "application/json"})
+        with urlopen(req, timeout=25) as r:
+            d = json.loads(r.read())
+        if not d.get("errors"):
+            return d
+        time.sleep(1.0)
+    return d
 
 
 def _apisports_state(short: str) -> str:
@@ -1077,7 +1086,7 @@ def fetch_apisports_games() -> list[dict]:
     if not APISPORTS_KEY:
         return []
     games = []
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:   # gentle concurrency to avoid rate bursts
         futs = {ex.submit(fetch_apisports_league, slug, lid): slug
                 for slug, lid in APISPORTS_LEAGUES.items()}
         for fut in as_completed(futs):
