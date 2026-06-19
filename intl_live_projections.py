@@ -2376,6 +2376,10 @@ def api_games():
         "completed_count": len(completed),
         "updated_at": datetime.now(ET).strftime("%I:%M:%S %p ET"),
         "error": error,
+        # diagnostic (no secret value): is APISPORTS_KEY present, and which
+        # leagues have api-sports ratings loaded (non-empty == calls succeeded)
+        "apisports_key_set": bool(APISPORTS_KEY),
+        "apisports_ratings": sorted(k for k, v in APISPORTS_RATINGS.items() if v),
     })
 
 
