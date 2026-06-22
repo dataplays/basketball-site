@@ -435,10 +435,11 @@ start_scheduler()
 # A slim cross-dashboard nav bar, a "last updated" footer, and a loading
 # indicator are injected at the WSGI layer so all dashboards stay in sync
 # without editing each one. The nav's active tab is derived from the mount path.
+# Top nav bar: just the live game dashboards. News / Median / Injuries are reached
+# from the landing page's "Tools & Reports" section (and the Tools link below).
 NAV_SHORT = {"nba": "NBA", "wnba": "WNBA", "cbb": "CBB", "wcbb": "WCBB",
-             "nbl": "NBL", "intl": "Intl", "big3": "BIG3", "median": "Median",
-             "news": "News", "injuries": "Injuries"}
-NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "big3", "median", "news", "injuries"]
+             "nbl": "NBL", "intl": "Intl", "big3": "BIG3"}
+NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "big3"]
 
 INJECT_CSS = (
     ".bb-nav{display:flex;gap:4px;overflow-x:auto;background:#0a1218;"
