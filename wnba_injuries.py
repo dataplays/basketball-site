@@ -46,6 +46,8 @@ WNBA_REPORTS = "https://www.wnba.com/api/injury-reports"
 WNBA_PAGE = "https://www.wnba.com/wnba-injury-report"
 AN_PAGE = "https://www.actionnetwork.com/wnba/injury-report"
 COVERS_PAGE = "https://www.covers.com/sport/basketball/wnba/injuries"
+ROTOWIRE_PAGE = "https://www.rotowire.com/wnba/injury-report.php"
+ROTOWIRE_INJ = "https://www.rotowire.com/wnba/tables/injury-report.php?team=ALL&pos=ALL"
 
 app = Flask(__name__)
 
@@ -236,18 +238,60 @@ def fetch_covers() -> list[dict]:
     return out
 
 
+# ── Rotowire (JSON behind the JS table) ──
+
+ROTOWIRE_TEAMS = {
+    "ATL": "Atlanta Dream", "CHI": "Chicago Sky", "CON": "Connecticut Sun",
+    "DAL": "Dallas Wings", "GS": "Golden State Valkyries", "GSV": "Golden State Valkyries",
+    "IND": "Indiana Fever", "LV": "Las Vegas Aces", "LVA": "Las Vegas Aces",
+    "LA": "Los Angeles Sparks", "LAS": "Los Angeles Sparks", "MIN": "Minnesota Lynx",
+    "NY": "New York Liberty", "NYL": "New York Liberty", "PHO": "Phoenix Mercury",
+    "PHX": "Phoenix Mercury", "POR": "Portland Fire", "PRT": "Portland Fire",
+    "SEA": "Seattle Storm", "TOR": "Toronto Tempo", "WAS": "Washington Mystics",
+    "WSH": "Washington Mystics",
+}
+
+
+def fetch_rotowire() -> list[dict]:
+    """Rotowire injuries from the JSON endpoint its JS table loads (needs a Referer)."""
+    try:
+        req = urllib.request.Request(ROTOWIRE_INJ, headers={
+            "User-Agent": UA, "Accept": "application/json", "Referer": ROTOWIRE_PAGE})
+        data = json.loads(urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "replace"))
+    except Exception as e:  # noqa: BLE001
+        print("[injuries] Rotowire failed:", e, file=sys.stderr)
+        return []
+    tm: dict = {}
+    for rec in data:
+        team = ROTOWIRE_TEAMS.get((rec.get("team") or "").upper(), rec.get("team") or "?")
+        injury = re.sub(r"<[^>]+>", "", str(rec.get("injury") or "")).strip()
+        rdate = re.sub(r"<[^>]+>", "", str(rec.get("rDate") or "")).strip()
+        comment = injury
+        if rdate and "subscriber" not in rdate.lower() and rdate not in ("-", "N/A", "n/a"):
+            comment = (comment + f" · est. return {rdate}").strip(" ·")
+        tm.setdefault(team, []).append({
+            "player": rec.get("player") or f"{rec.get('firstname','')} {rec.get('lastname','')}".strip(),
+            "pos": rec.get("position", ""),
+            "status": rec.get("status", ""),
+            "comment": comment,
+        })
+    return _group(tm)
+
+
 # ── Combine + cache ──
 
 def gather() -> dict:
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=5) as ex:
         f_off = ex.submit(fetch_official)
         f_espn = ex.submit(fetch_espn)
         f_an = ex.submit(fetch_actionnetwork)
         f_cov = ex.submit(fetch_covers)
+        f_rw = ex.submit(fetch_rotowire)
         official = f_off.result()
         sources = [
             ("ESPN", ESPN_PAGE, f_espn.result()),
             ("Action Network", AN_PAGE, f_an.result()),
+            ("Rotowire", ROTOWIRE_PAGE, f_rw.result()),
             ("Covers", COVERS_PAGE, f_cov.result()),
         ]
     now = datetime.now(ET) if ET else datetime.now()
@@ -325,10 +369,20 @@ def _esc(s) -> str:
 
 
 def _badge(status: str) -> str:
-    cls = "b-" + re.sub(r"[^a-z]+", "-", (status or "").lower()).strip("-")
-    known = {"b-out", "b-doubtful", "b-questionable", "b-probable", "b-available",
-             "b-day-to-day", "b-gtd", "b-game-time-decision"}
-    return f'<span class="badge {cls if cls in known else "b-default"}">{_esc(status or "—")}</span>'
+    s = (status or "").lower()
+    if not s:
+        cls = "b-default"
+    elif "doubt" in s:
+        cls = "b-doubtful"
+    elif "out" in s or "season" in s:
+        cls = "b-out"
+    elif "quest" in s or "game time" in s or "gtd" in s or "day" in s:
+        cls = "b-questionable"
+    elif "prob" in s or "avail" in s:
+        cls = "b-probable"
+    else:
+        cls = "b-default"
+    return f'<span class="badge {cls}">{_esc(status or "—")}</span>'
 
 
 def _row(p: dict) -> str:
@@ -405,6 +459,7 @@ def render_page(data: dict) -> str:
 <div class="disc">Sources: official <a href="{WNBA_PAGE}" target="_blank" rel="noopener">WNBA.com</a>,
 <a href="{ESPN_PAGE}" target="_blank" rel="noopener">ESPN</a>,
 <a href="{AN_PAGE}" target="_blank" rel="noopener">Action Network</a>,
+<a href="{ROTOWIRE_PAGE}" target="_blank" rel="noopener">Rotowire</a>,
 <a href="{COVERS_PAGE}" target="_blank" rel="noopener">Covers</a> &middot; cached ~10 min &middot; for information only.</div>
 </div></body></html>"""
 
