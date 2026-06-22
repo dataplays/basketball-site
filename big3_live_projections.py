@@ -510,6 +510,72 @@ def _write_ratings_template(games):
         print(f"[ratings] could not write template: {e}", file=sys.stderr)
 
 
+def _clamp_rating(x, lo=0.82, hi=1.20):
+    return max(lo, min(hi, x))
+
+
+def compute_ratings_from_games(games, shrink_k=4.0):
+    """Derive per-team off/def multipliers from COMPLETED games.
+
+    A team's offense = its points scored vs the league per-game average; its
+    defense = points it allowed vs that average (def multiplies the opponent's
+    offense in project_game, so >1 = leaky, <1 = stingy). Ratings are shrunk
+    toward 1.0 by games played: with BIG3's tiny samples -- and race-to-50 scores
+    that pin winners near 50 -- one result should only nudge the line, not swing
+    it. factor = n/(n+K): 1 game -> 20%, 4 -> 50%, 8 -> 67%. Returns
+    {team_key: {"off":.., "def":..}} for teams that have played.
+    """
+    pf, pa, n, pts = {}, {}, {}, []
+    for g in games:
+        if g.get("status") != "final":
+            continue
+        h, a = g["home"], g["away"]
+        hs, as_ = float(h.get("score") or 0), float(a.get("score") or 0)
+        if hs <= 0 and as_ <= 0:        # no real result (0-0)
+            continue
+        for k, sf, sag in ((h["key"], hs, as_), (a["key"], as_, hs)):
+            pf[k] = pf.get(k, 0.0) + sf
+            pa[k] = pa.get(k, 0.0) + sag
+            n[k] = n.get(k, 0) + 1
+        pts += [hs, as_]
+    if not pts:
+        return {}
+    league_avg = sum(pts) / len(pts)
+    if league_avg <= 0:
+        return {}
+    out = {}
+    for k, gp in n.items():
+        raw_off = (pf[k] / gp) / league_avg
+        raw_def = (pa[k] / gp) / league_avg
+        f = gp / (gp + shrink_k)
+        out[k] = {
+            "off": round(_clamp_rating(1.0 + f * (raw_off - 1.0)), 4),
+            "def": round(_clamp_rating(1.0 + f * (raw_def - 1.0)), 4),
+        }
+    return out
+
+
+def _persist_ratings(ratings, games):
+    """Best-effort write of the current (auto) ratings to the CSV for visibility
+    and persistence. Caller decides when something changed; this just writes."""
+    teams = {}
+    for g in games:
+        for side in ("home", "away"):
+            t = g[side]
+            teams[t["key"]] = t["name"]
+    if not teams:
+        return
+    try:
+        with open(RATINGS_CSV, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["team_id", "team", "off_rating", "def_rating"])
+            for key, name in sorted(teams.items(), key=lambda kv: kv[1]):
+                rt = ratings.get(key, {"off": 1.0, "def": 1.0})
+                w.writerow([key, name, f"{rt['off']:.4f}", f"{rt['def']:.4f}"])
+    except Exception as e:
+        print(f"[ratings] persist failed: {e}", file=sys.stderr)
+
+
 # ----------------------------------------------------------------------------
 # Slate selection + the payload the dashboard consumes
 # ----------------------------------------------------------------------------
@@ -525,6 +591,15 @@ def build_payload(year=SEASON_YEAR, date_override=None, sims=DEFAULT_SIMS):
     raw = fetch_feed(year)
     games = normalize_games(raw)
     ratings = load_ratings(games)
+
+    # Auto-update team strength from completed games (shrunk toward league avg
+    # for small samples), so projections reflect results as the season unfolds.
+    auto = compute_ratings_from_games(games)
+    if auto:
+        changed = any(ratings.get(k) != v for k, v in auto.items())
+        ratings.update(auto)
+        if changed:
+            _persist_ratings(ratings, games)
 
     today = _today_et(date_override)
     live = [g for g in games if g["status"] == "live"]
