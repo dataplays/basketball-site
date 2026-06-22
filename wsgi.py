@@ -57,6 +57,7 @@ DASH_COLORS = {
     "big3": "#e8112d",
     "median": "#4fc3f7",
     "news": "#e8730c",
+    "injuries": "#e03e3e",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -103,6 +104,7 @@ TOOLS = discover_tools()
 EXTRA_DASHBOARDS = {
     "median_probabilities": ("median", "Median Probabilities"),
     "news_page": ("news", "Court & Cover — Daily Brief"),
+    "wnba_injuries": ("injuries", "WNBA Injury Report"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
@@ -418,8 +420,8 @@ start_scheduler()
 # without editing each one. The nav's active tab is derived from the mount path.
 NAV_SHORT = {"nba": "NBA", "wnba": "WNBA", "cbb": "CBB", "wcbb": "WCBB",
              "nbl": "NBL", "intl": "Intl", "big3": "BIG3", "median": "Median",
-             "news": "News"}
-NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "big3", "median", "news"]
+             "news": "News", "injuries": "Injuries"}
+NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "big3", "median", "news", "injuries"]
 
 INJECT_CSS = (
     ".bb-nav{display:flex;gap:4px;overflow-x:auto;background:#0a1218;"
