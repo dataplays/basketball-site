@@ -1003,20 +1003,29 @@ def _apisports_to_game(slug: str, g: dict) -> dict:
             pass
     period = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "HT": 2, "BT": 2,
               "FT": 4, "AOT": 4}.get(short, 0)
-    # api-sports "timer" is minutes (or M:SS) remaining in the period -> seconds,
-    # which is what project_game expects as clock_seconds for live time math.
+    # api-sports "timer" is the ELAPSED clock in the period, counting UP -- verified
+    # live (it ticked 3 -> 4 during Q1 with the score rising). project_game expects
+    # clock_seconds = seconds REMAINING in the period, so convert. Defensive against
+    # feeds that report whole-game elapsed minutes instead of per-period.
     clock_seconds = 0
     timer = st.get("timer")
-    if timer not in (None, ""):
+    if state == "in" and timer not in (None, ""):
         ts_s = str(timer).strip()
         try:
             if ":" in ts_s:
                 mm, ss = (ts_s.split(":") + ["0"])[:2]
-                clock_seconds = int(float(mm)) * 60 + int(float(ss))
+                elapsed_sec = int(float(mm)) * 60 + int(float(ss))
             else:
-                clock_seconds = int(float(ts_s)) * 60
+                elapsed_sec = int(float(ts_s)) * 60
         except (ValueError, TypeError):
-            clock_seconds = 0
+            elapsed_sec = 0
+        qtr_sec = float(cfg.get("qtr_min", 10.0)) * 60.0
+        per = period if (period and period >= 1) else 1
+        elapsed_in_period = elapsed_sec
+        if elapsed_in_period > qtr_sec:      # looks like whole-game elapsed -> reduce to this period
+            elapsed_in_period = elapsed_sec - (per - 1) * qtr_sec
+        elapsed_in_period = min(max(elapsed_in_period, 0.0), qtr_sec)
+        clock_seconds = int(qtr_sec - elapsed_in_period)
     detail = ("Final" if state == "post"
               else st.get("long") if state == "in"
               else (g.get("week") or g.get("stage") or time_str))
@@ -1337,6 +1346,16 @@ def pct_class(pct: int) -> str:
     return "pct-very-low"
 
 
+def _fmt_clock(mins_left: float, estimated: bool) -> str:
+    """Format minutes-left as M:SS; prefix '~' and suffix '(est)' when inferred."""
+    mins_left = max(0.0, mins_left)
+    m = int(mins_left)
+    s = int(round((mins_left - m) * 60))
+    if s == 60:
+        m, s = m + 1, 0
+    return f"~{m}:{s:02d} (est)" if estimated else f"{m}:{s:02d}"
+
+
 def project_game(game: dict) -> dict:
     """Compute projections for a single game."""
     slug = game["league_slug"]
@@ -1421,6 +1440,9 @@ def project_game(game: dict) -> dict:
     state = game["state"]
     detail = game.get("status_detail", "").lower()
 
+    clock_display = ""        # period + time-left, shown for live games
+    clock_estimated = False   # True when the feed gave no clock and we inferred it
+
     if state == "pre":
         time_elapsed = 0.0
         total_game_min = reg_min
@@ -1439,12 +1461,37 @@ def project_game(game: dict) -> dict:
             time_elapsed = period * qtr_min
             total_game_min = reg_min
         elif period <= 4:
-            time_elapsed = (period - 1) * qtr_min + (qtr_min - clock_min)
             total_game_min = reg_min
+            if clock_sec > 0:
+                qtr_left = clock_min                       # real game clock
+            else:
+                # The feed gave no game clock (common on some api-sports
+                # leagues). Estimate progress through the current quarter from
+                # score vs the projected total, constrained to this quarter
+                # (fallback: mid-quarter). Without this, a missing clock made
+                # the model assume the whole quarter was already over.
+                exp_total = away_proj_full + home_proj_full
+                cur_total = game["away_score"] + game["home_score"]
+                frac = 0.5
+                if exp_total > 0 and cur_total > 0:
+                    implied_min = (cur_total / exp_total) * reg_min
+                    frac = (implied_min - (period - 1) * qtr_min) / qtr_min
+                    frac = min(max(frac, 0.05), 0.95)
+                qtr_left = qtr_min * (1.0 - frac)
+                clock_estimated = True
+            time_elapsed = (period - 1) * qtr_min + (qtr_min - qtr_left)
+            clock_display = f"Q{period} {_fmt_clock(qtr_left, clock_estimated)}"
         else:
             ot_num = period - 4
-            time_elapsed = reg_min + (ot_num - 1) * ot_min + (ot_min - clock_min)
             total_game_min = reg_min + ot_min * ot_num
+            if clock_sec > 0:
+                ot_left = clock_min
+            else:
+                ot_left = ot_min * 0.5
+                clock_estimated = True
+            time_elapsed = reg_min + (ot_num - 1) * ot_min + (ot_min - ot_left)
+            ot_lbl = "OT" if ot_num == 1 else f"OT{ot_num}"
+            clock_display = f"{ot_lbl} {_fmt_clock(ot_left, clock_estimated)}"
 
     time_remaining = max(0.0, total_game_min - time_elapsed)
 
@@ -1490,11 +1537,8 @@ def project_game(game: dict) -> dict:
         away_1h_proj = half_min * (away_proj_full / reg_min)
         home_1h_proj = half_min * (home_proj_full / reg_min)
     elif period <= 2 and state == "in":
-        if period == 1:
-            elapsed_1h = qtr_min - (clock_sec / 60.0)
-        else:
-            elapsed_1h = qtr_min + (qtr_min - (clock_sec / 60.0))
-        remaining_1h = max(half_min - elapsed_1h, 0.0)
+        # time_elapsed already reflects the real-or-estimated clock for 1H periods
+        remaining_1h = max(half_min - time_elapsed, 0.0)
         away_1h_proj = game["away_score"] + remaining_1h * away_ppm_adj
         home_1h_proj = game["home_score"] + remaining_1h * home_ppm_adj
     else:
@@ -1542,6 +1586,8 @@ def project_game(game: dict) -> dict:
         "game_pace": round(game_pace, 1),
         "time_elapsed": round(time_elapsed, 1),
         "time_remaining": round(time_remaining, 1),
+        "clock_display": clock_display,
+        "clock_estimated": clock_estimated,
         "poss_so_far": round(poss_so_far, 1),
         "poss_remaining": round(poss_remaining, 1),
         "total_expected_poss": round(total_poss, 1),
@@ -2044,7 +2090,7 @@ LIVE_PARTIAL = r"""{% if games %}
           <span class="dash">-</span>
           <span class="{{ 'winning' if g.home_score > g.away_score else '' }}">{{ g.home_score }}</span>
         </div>
-        <div class="clock-line">{{ g.status_detail }}</div>
+        <div class="clock-line">{{ g.clock_display if g.clock_display else g.status_detail }}</div>
       </div>
       <div class="team home">
         <span class="team-name">{{ g.home_name }}</span>
