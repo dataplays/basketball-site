@@ -68,6 +68,14 @@ TOOL_REQUIRES = {
     "wnba_props_track": ["wnba_props_grade.py"],
     "wnba_props_projections": ["wnba_props_grade.py"],
 }
+# Mounted pages that belong under "Tools & Reports" on the landing page (instead
+# of the main Dashboards grid). prefix -> card description. They stay mounted and
+# in the nav; this only changes which homepage section their card appears in.
+LANDING_TOOLS = {
+    "news": "Daily basketball & betting brief",
+    "median": "Prop median → probability calculator",
+    "injuries": "WNBA injury report — 5 sources",
+}
 
 
 # ── Discover dashboards & tools sitting next to this file ─────────────────────
@@ -206,6 +214,12 @@ LANDING_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 
   <div class=section style="margin-top:32px">Tools &amp; Reports</div>
   <div class=grid>
+    {% for prefix,label,color,desc in extras %}
+    <a class=card style="border-left-color:{{ color }}" href="/{{ prefix }}/">
+      <div class=t>{{ label }}</div>
+      <div class=d>{{ desc }}</div>
+    </a>
+    {% endfor %}
     <a class=card style="border-left-color:var(--green)" href="/tools">
       <div class=t>Props Tools &rarr;</div>
       <div class=d>Run projections &amp; grading on demand</div>
@@ -277,10 +291,13 @@ def favicon():
 @landing.route("/")
 def home():
     dash = sorted([(p, DASH_LABELS.get(p, p.upper()), DASH_COLORS.get(p, "#2196f3"))
-                   for p in DASHBOARDS], key=lambda x: x[1])
+                   for p in DASHBOARDS if p not in LANDING_TOOLS], key=lambda x: x[1])
+    extras = sorted([(p, DASH_LABELS.get(p, p.upper()), DASH_COLORS.get(p, "#2196f3"),
+                      LANDING_TOOLS[p]) for p in DASHBOARDS if p in LANDING_TOOLS],
+                    key=lambda x: x[1])
     return render_template_string(
         LANDING_HTML, css=PAGE_CSS, head_extra=HEAD_EXTRA, dashboards=dash,
-        reports=_reports(), refresh_hour=f"{CBB_REFRESH_HOUR:02d}",
+        extras=extras, reports=_reports(), refresh_hour=f"{CBB_REFRESH_HOUR:02d}",
     )
 
 
