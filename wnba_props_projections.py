@@ -908,10 +908,34 @@ def project_player(
     spread: float | None,
     team_b2b: bool,
     injured_teammates: list[dict],
+    player_recent_events: list | None = None,
 ) -> dict:
     """Project expected minutes, points, and rebounds for a player."""
 
     base_min = stats["weighted_mpg"]
+
+    # Presence gate: the weighted fraction of THIS player's recent game sample
+    # that each OUT teammate actually played in (matched by ESPN event id). A
+    # teammate who's been out for the whole sample (e.g. a season-long injury)
+    # is ALREADY reflected in base_min / ppm / rpm, so their redistribution
+    # boost must not be applied again -> presence ~0. A just-injured teammate
+    # who played the whole sample scores ~1.0 and gets the full boost (the
+    # original behaviour). Recent games are weighted like the rolling averages.
+    _recent_events = player_recent_events or []
+
+    def _presence(tm: dict) -> float:
+        tm_events = tm.get("events") or set()
+        num = den = 0.0
+        for i, ev in enumerate(_recent_events):
+            if not ev:
+                continue
+            w = GAME_WEIGHTS[i] if i < len(GAME_WEIGHTS) else GAME_WEIGHTS[-1]
+            den += w
+            if ev in tm_events:
+                num += w
+        return (num / den) if den else 1.0
+
+    presence = {tm["id"]: _presence(tm) for tm in injured_teammates}
 
     # B2B adjustment (by age) — WNBA effect smaller than NBA per published research
     b2b_adj = 0.0
@@ -949,6 +973,9 @@ def project_player(
         tm_stats = tm.get("stats")
         if not tm_stats:
             continue
+        pf = presence.get(tm["id"], 1.0)
+        if pf <= 0:
+            continue  # absence already baked into this player's baseline
         absent_mpg = tm_stats["weighted_mpg"]
         tm_pos = tm.get("position", "")
         tm_is_big = tm_pos in ("C", "PF", "F-C", "C-F")
@@ -957,12 +984,12 @@ def project_player(
 
         if (is_big and tm_is_big) or (is_guard and tm_is_guard) or (is_wing and tm_is_wing):
             if base_min >= 22:
-                injury_min_boost += absent_mpg * 0.20
+                injury_min_boost += absent_mpg * 0.20 * pf
             elif base_min >= 12:
-                injury_min_boost += absent_mpg * 0.12
+                injury_min_boost += absent_mpg * 0.12 * pf
         else:
             if base_min >= 24:
-                injury_min_boost += absent_mpg * 0.06
+                injury_min_boost += absent_mpg * 0.06 * pf
 
     expected_min = base_min + b2b_adj + blowout_adj + foul_adj + injury_min_boost
     expected_min = max(expected_min, 0.0)
@@ -977,10 +1004,11 @@ def project_player(
         tm_stats = tm.get("stats")
         if not tm_stats:
             continue
+        pf = presence.get(tm["id"], 1.0)
         if tm_stats["season_ppg"] >= 16:
-            usage_boost += 0.07
+            usage_boost += 0.07 * pf
         elif tm_stats["season_ppg"] >= 12:
-            usage_boost += 0.035
+            usage_boost += 0.035 * pf
     adjusted_ppm = ppm * (1 + usage_boost)
 
     opp_de = opp_ratings.get("de", LEAGUE_AVG_DRTG)
@@ -1005,15 +1033,16 @@ def project_player(
         tm_stats = tm.get("stats")
         if not tm_stats:
             continue
+        pf = presence.get(tm["id"], 1.0)
         tm_pos = tm.get("position", "")
         tm_is_big = tm_pos in ("C", "PF", "F-C", "C-F")
         if tm_stats["season_rpg"] >= 6:
             if is_big and tm_is_big:
-                reb_teammate_boost += tm_stats["season_rpg"] * 0.35
+                reb_teammate_boost += tm_stats["season_rpg"] * 0.35 * pf
             elif is_big:
-                reb_teammate_boost += tm_stats["season_rpg"] * 0.15
+                reb_teammate_boost += tm_stats["season_rpg"] * 0.15 * pf
             elif (is_wing or is_guard) and tm_is_big:
-                reb_teammate_boost += tm_stats["season_rpg"] * 0.08
+                reb_teammate_boost += tm_stats["season_rpg"] * 0.08 * pf
 
     expected_reb = expected_min * rpm_val * reb_opp_adj * pace_adj + reb_teammate_boost
 
@@ -1222,11 +1251,13 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                 pid = p["id"]
                 if injuries_dict.get(pid) in ("out", "doubtful"):
                     s = stats_cache.get(pid)
+                    tm_log = gamelog_cache.get(pid, [])
                     injured.append({
                         "id": pid,
                         "name": p["name"],
                         "position": p["position"],
                         "stats": s,
+                        "events": {g["event_id"] for g in tm_log if g.get("event_id")},
                     })
             return injured
 
@@ -1257,6 +1288,8 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                     spread=spread,
                     team_b2b=team_b2b,
                     injured_teammates=injured_tms,
+                    player_recent_events=[g.get("event_id", "")
+                                          for g in gamelog_cache.get(pid, [])[:15]],
                 )
 
                 player_gamelog = gamelog_cache.get(pid, [])
