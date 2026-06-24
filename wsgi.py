@@ -58,6 +58,7 @@ DASH_COLORS = {
     "median": "#4fc3f7",
     "news": "#e8730c",
     "injuries": "#e03e3e",
+    "prophetx": "#15c39a",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -113,6 +114,7 @@ EXTRA_DASHBOARDS = {
     "median_probabilities": ("median", "Median Probabilities"),
     "news_page": ("news", "Court & Cover — Daily Brief"),
     "wnba_injuries": ("injuries", "WNBA Injury Report"),
+    "prophetx_live": ("prophetx", "ProphetX Exchange Lines"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
@@ -438,8 +440,8 @@ start_scheduler()
 # Top nav bar: just the live game dashboards. News / Median / Injuries are reached
 # from the landing page's "Tools & Reports" section (and the Tools link below).
 NAV_SHORT = {"nba": "NBA", "wnba": "WNBA", "cbb": "CBB", "wcbb": "WCBB",
-             "nbl": "NBL", "intl": "Intl", "big3": "BIG3"}
-NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "big3"]
+             "nbl": "NBL", "intl": "Intl", "big3": "BIG3", "prophetx": "ProphetX"}
+NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "big3", "prophetx"]
 
 INJECT_CSS = (
     ".bb-nav{display:flex;gap:4px;overflow-x:auto;background:#0a1218;"
