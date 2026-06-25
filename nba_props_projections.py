@@ -105,6 +105,11 @@ LEAGUE_AVG_REB_PG = 43.5
 # Minimum minutes threshold — skip players who avg < 10 min
 MIN_MPG_THRESHOLD = 10.0
 
+# A projection based on fewer than this many games this season is flagged
+# "thin:N" in the output — small sample, so a recent form/role change shows up
+# as a loud but fragile edge (mirrors the WNBA engine's thin-sample flag).
+THIN_SAMPLE_GP = 8
+
 # Minimum edge to flag as a bet candidate
 PTS_EDGE_THRESHOLD = 1.5
 REB_EDGE_THRESHOLD = 1.0
@@ -873,6 +878,9 @@ def compute_player_stats(games: list[dict]) -> dict | None:
         "season_ppg": season_ppg,
         "season_rpg": season_rpg,
         "games_played": games_played,
+        # NBA gamelog is a single (current) season with no prior-year padding,
+        # so every game is current-season.
+        "cur_season_games": games_played,
         "max_min_last_40": max_min_last_40,
     }
 
@@ -1382,6 +1390,7 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                     "spread": spread,
                     "injury_status": injuries.get(pid, "active"),
                     "season_gp": pstats["games_played"],
+                    "cur_season_gp": pstats["cur_season_games"],
                     "season_ppg": round(pstats["season_ppg"], 1),
                     "season_rpg": round(pstats["season_rpg"], 1),
                     "season_mpg": round(pstats["season_mpg"], 1),
@@ -1509,6 +1518,8 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                     notes.append(f"{p['blowout_adj']:.0f}m")
                 if p["usage_boost"] > 0.02:
                     notes.append(f"+{p['usage_boost']*100:.0f}%u")
+                if p.get("cur_season_gp", 99) < THIN_SAMPLE_GP:
+                    notes.append(f"thin:{p['cur_season_gp']}")
 
                 # Points prop (use simulation median)
                 sim_pts = p.get("sim_median_pts", p["expected_pts"])
@@ -1579,6 +1590,7 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                 "edge": ev.get("edge", 0), "rec": ev["rec"],
                 "ev_pct": best_ev, "book": book,
                 "n_books": p.get(f"{prefix}_book_count", 0),
+                "cur_season_gp": p.get("cur_season_gp", 99),
             })
 
     top_bets.sort(key=lambda x: x["ev_pct"], reverse=True)
@@ -1588,14 +1600,20 @@ def run_projections(date_str: str, generate_pdf: bool = False):
         print(f"  TOP BETS BY EV%")
         print(f"{'='*112}")
         print(f"  {'#':>2} {'Player':<22} {'Tm':>3} {'Game':>10} {'Prop':>8} "
-              f"{'Line':>5} {'Sim':>5} {'Edge':>6} {'Rec':>5} {'EV%':>7} {'Book':>5} {'#Bk':>4}")
-        print(f"  {'-'*108}")
+              f"{'Line':>5} {'Sim':>5} {'Edge':>6} {'Rec':>5} {'EV%':>7} {'Book':>5} {'#Bk':>4}  {'Flag'}")
+        print(f"  {'-'*120}")
+        thin_any = False
         for i, b in enumerate(top_bets[:10], 1):
+            flag = f"thin:{b['cur_season_gp']}" if b["cur_season_gp"] < THIN_SAMPLE_GP else ""
+            thin_any = thin_any or bool(flag)
             print(
                 f"  {i:>2} {b['player']:<22} {b['team']:>3} {b['game']:>10} {b['prop']:>8} "
                 f"{b['line']:>5.1f} {b['sim']:>5} {b['edge']:>+6.1f} {b['rec']:>5} {b['ev_pct']:>+6.1f}% "
-                f"{b['book']:>5} {b['n_books']:>4}"
+                f"{b['book']:>5} {b['n_books']:>4}  {flag}"
             )
+        if thin_any:
+            print(f"\n  Flag thin:N = projection based on only N games this season "
+                  f"(< {THIN_SAMPLE_GP}); small sample - treat with caution.")
 
     # ── Generate PDF if requested ──
     if generate_pdf:
@@ -1680,6 +1698,7 @@ def generate_pdf_report(projections, games, game_data, date_str):
                 "edge": pts_ev.get("edge", 0), "rec": pts_ev["rec"],
                 "ev_pct": best_ev, "ev_over": pts_ev.get("ev_over", 0),
                 "ev_under": pts_ev.get("ev_under", 0),
+                "cur_season_gp": p.get("cur_season_gp", 99),
             })
         if reb_ev.get("rec"):
             best_ev = reb_ev["ev_over"] if reb_ev["rec"] == "OVER" else reb_ev["ev_under"]
@@ -1690,6 +1709,7 @@ def generate_pdf_report(projections, games, game_data, date_str):
                 "edge": reb_ev.get("edge", 0), "rec": reb_ev["rec"],
                 "ev_pct": best_ev, "ev_over": reb_ev.get("ev_over", 0),
                 "ev_under": reb_ev.get("ev_under", 0),
+                "cur_season_gp": p.get("cur_season_gp", 99),
             })
 
     top_props.sort(key=lambda x: x["ev_pct"], reverse=True)
@@ -1697,9 +1717,12 @@ def generate_pdf_report(projections, games, game_data, date_str):
     # Build summary table
     sum_data = [["#", "Player", "Tm", "Game", "Prop", "Line", "Sim", "Edge", "Rec", "EV%"]]
     for idx, tp in enumerate(top_props[:50], 1):  # top 50
+        pname = tp["player"]
+        if tp.get("cur_season_gp", 99) < THIN_SAMPLE_GP:
+            pname += f" *{tp['cur_season_gp']}"
         sum_data.append([
             str(idx),
-            tp["player"],
+            pname,
             tp["team"],
             tp["game"],
             tp["prop"],
@@ -1751,6 +1774,10 @@ def generate_pdf_report(projections, games, game_data, date_str):
 
         sum_t.setStyle(TableStyle(sum_style))
         elements.append(sum_t)
+        elements.append(Paragraph(
+            f"* N after a player = projection based on only N games this season "
+            f"(&lt; {THIN_SAMPLE_GP}); small sample - treat the edge with caution.",
+            subtitle_style))
     else:
         elements.append(Paragraph("No props with positive EV found.", subtitle_style))
 
@@ -1818,6 +1845,8 @@ def generate_pdf_report(projections, games, game_data, date_str):
                 notes.append(f"{p['blowout_adj']:.0f}m")
             if p["usage_boost"] > 0.02:
                 notes.append(f"+{p['usage_boost']*100:.0f}%u")
+            if p.get("cur_season_gp", 99) < THIN_SAMPLE_GP:
+                notes.append(f"thin:{p['cur_season_gp']}")
 
             pts_ev = p.get("pts_ev", {})
             reb_ev = p.get("reb_ev", {})

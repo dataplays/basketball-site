@@ -121,6 +121,12 @@ SEASONS_TO_FETCH = [2026, 2025]
 # a total of 15 games to feed the rolling window.
 PRIOR_SEASON_PAD_TARGET = 15
 
+# A projection leaning on fewer than this many CURRENT-season games is flagged
+# "thin:N" in the output — the rest of its sample is prior-season padding, so a
+# recent form/role change shows up as a loud but fragile edge (see Ionescu,
+# Jun 2026: 6 games at ~9 ppg padded with 2025 produced a +56% phantom UNDER).
+THIN_SAMPLE_GP = 8
+
 # ESPN team name aliases — ESPN scoreboard uses location, CSV is keyed by location too,
 # but a couple of WNBA team locations have alternate forms.
 ESPN_TO_CSV = {
@@ -363,7 +369,10 @@ def fetch_player_gamelog(player_id: str) -> list[dict]:
     for season in SEASONS_TO_FETCH:
         url = ESPN_GAMELOG.format(player_id=player_id, season=season)
         data = fetch_json(url)
-        season_games[season] = _parse_gamelog_payload(data) if data else []
+        parsed = _parse_gamelog_payload(data) if data else []
+        for g in parsed:
+            g["season"] = season          # tag so we can count current-season games
+        season_games[season] = parsed
 
     # Newest season first
     games: list[dict] = []
@@ -859,6 +868,7 @@ def compute_player_stats(games: list[dict]) -> dict | None:
     season_ppg = sum(g["pts"] for g in all_games) / len(all_games) if all_games else 0
     season_rpg = sum(g["reb"] for g in all_games) / len(all_games) if all_games else 0
     games_played = len(all_games)
+    cur_season_games = sum(1 for g in all_games if g.get("season") == SEASONS_TO_FETCH[0])
 
     last_40 = games[:40]
     max_min_last_40 = max((g["min"] for g in last_40), default=0.0)
@@ -874,6 +884,7 @@ def compute_player_stats(games: list[dict]) -> dict | None:
         "season_ppg": season_ppg,
         "season_rpg": season_rpg,
         "games_played": games_played,
+        "cur_season_games": cur_season_games,
         "max_min_last_40": max_min_last_40,
     }
 
@@ -1323,6 +1334,7 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                     "spread": spread,
                     "injury_status": injuries.get(pid, "active"),
                     "season_gp": pstats["games_played"],
+                    "cur_season_gp": pstats["cur_season_games"],
                     "season_ppg": round(pstats["season_ppg"], 1),
                     "season_rpg": round(pstats["season_rpg"], 1),
                     "season_mpg": round(pstats["season_mpg"], 1),
@@ -1441,6 +1453,8 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                     notes.append(f"{p['blowout_adj']:.0f}m")
                 if p["usage_boost"] > 0.02:
                     notes.append(f"+{p['usage_boost']*100:.0f}%u")
+                if p.get("cur_season_gp", 99) < THIN_SAMPLE_GP:
+                    notes.append(f"thin:{p['cur_season_gp']}")
 
                 sim_pts = p.get("sim_median_pts", p["expected_pts"])
                 pts_ln = f"{p['pts_line']:.1f}" if p["pts_line"] is not None else "  -  "
@@ -1509,6 +1523,7 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                 "edge": ev.get("edge", 0), "rec": ev["rec"],
                 "ev_pct": best_ev, "book": book,
                 "n_books": p.get(f"{prefix}_book_count", 0),
+                "cur_season_gp": p.get("cur_season_gp", 99),
             })
 
     top_bets.sort(key=lambda x: x["ev_pct"], reverse=True)
@@ -1518,14 +1533,20 @@ def run_projections(date_str: str, generate_pdf: bool = False):
         print(f"  TOP BETS BY EV%")
         print(f"{'='*112}")
         print(f"  {'#':>2} {'Player':<22} {'Tm':>3} {'Game':>10} {'Prop':>8} "
-              f"{'Line':>5} {'Sim':>5} {'Edge':>6} {'Rec':>5} {'EV%':>7} {'Book':>5} {'#Bk':>4}")
-        print(f"  {'-'*108}")
+              f"{'Line':>5} {'Sim':>5} {'Edge':>6} {'Rec':>5} {'EV%':>7} {'Book':>5} {'#Bk':>4}  {'Flag'}")
+        print(f"  {'-'*120}")
+        thin_any = False
         for i, b in enumerate(top_bets[:10], 1):
+            flag = f"thin:{b['cur_season_gp']}" if b["cur_season_gp"] < THIN_SAMPLE_GP else ""
+            thin_any = thin_any or bool(flag)
             print(
                 f"  {i:>2} {b['player']:<22} {b['team']:>3} {b['game']:>10} {b['prop']:>8} "
                 f"{b['line']:>5.1f} {b['sim']:>5} {b['edge']:>+6.1f} {b['rec']:>5} {b['ev_pct']:>+6.1f}% "
-                f"{b['book']:>5} {b['n_books']:>4}"
+                f"{b['book']:>5} {b['n_books']:>4}  {flag}"
             )
+        if thin_any:
+            print(f"\n  Flag thin:N = projection leans on only N current-season games "
+                  f"(< {THIN_SAMPLE_GP}); small sample padded with last year - treat with caution.")
 
     if generate_pdf:
         pdf_path = generate_pdf_report(all_projections, games, game_data, date_str)
@@ -1652,15 +1673,19 @@ def generate_pdf_report(projections, games, game_data, date_str):
                 "ev_pct": best_ev, "ev_over": ev.get("ev_over", 0),
                 "ev_under": ev.get("ev_under", 0),
                 "book": book, "n_books": p.get(f"{prefix}_book_count", 0),
+                "cur_season_gp": p.get("cur_season_gp", 99),
             })
 
     top_props.sort(key=lambda x: x["ev_pct"], reverse=True)
 
     sum_data = [["#", "Player", "Tm", "Game", "Prop", "Line", "Sim", "Edge", "Rec", "EV%", "Book", "#Bk"]]
     for idx, tp in enumerate(top_props[:50], 1):
+        pname = tp["player"]
+        if tp.get("cur_season_gp", 99) < THIN_SAMPLE_GP:
+            pname += f" *{tp['cur_season_gp']}"
         sum_data.append([
             str(idx),
-            tp["player"],
+            pname,
             tp["team"],
             tp["game"],
             tp["prop"],
@@ -1714,6 +1739,10 @@ def generate_pdf_report(projections, games, game_data, date_str):
 
         sum_t.setStyle(TableStyle(sum_style))
         elements.append(sum_t)
+        elements.append(Paragraph(
+            f"* N after a player = projection leans on only N current-season games "
+            f"(&lt; {THIN_SAMPLE_GP}); small sample padded with last year — treat the "
+            f"edge with caution.", subtitle_style))
     else:
         elements.append(Paragraph("No props with positive EV found.", subtitle_style))
 
@@ -1772,6 +1801,8 @@ def generate_pdf_report(projections, games, game_data, date_str):
                 notes.append(f"{p['blowout_adj']:.0f}m")
             if p["usage_boost"] > 0.02:
                 notes.append(f"+{p['usage_boost']*100:.0f}%u")
+            if p.get("cur_season_gp", 99) < THIN_SAMPLE_GP:
+                notes.append(f"thin:{p['cur_season_gp']}")
 
             pts_ev = p.get("pts_ev", {})
             reb_ev = p.get("reb_ev", {})
