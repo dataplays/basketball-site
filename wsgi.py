@@ -64,10 +64,13 @@ TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
     "wnba_props_projections": "WNBA Player Props — Projections",
     "wnba_props_track": "WNBA Props — Tracker / Grading",
+    "nba_props_track": "NBA Props — Tracker / Grading",
 }
 TOOL_REQUIRES = {
     "wnba_props_track": ["wnba_props_grade.py"],
     "wnba_props_projections": ["wnba_props_grade.py"],
+    "nba_props_track": ["nba_props_grade.py"],
+    "nba_props_projections": ["nba_props_grade.py"],
 }
 # Mounted pages that belong under "Tools & Reports" on the landing page (instead
 # of the main Dashboards grid). prefix -> card description. They stay mounted and

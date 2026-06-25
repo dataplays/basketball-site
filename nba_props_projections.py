@@ -1624,7 +1624,42 @@ def run_projections(date_str: str, generate_pdf: bool = False):
     print(f"  Done. {len(all_projections)} players projected.")
     print(f"{'='*70}\n")
 
+    _update_tracker()
+
     return all_projections
+
+
+def _update_tracker():
+    """Grade any now-settled prior days into the forward performance tracker.
+
+    Runs after the day's projections so the win/loss tracker self-updates
+    (e.g. yesterday's slate, now final) every time projections are generated.
+    Idempotent and fully guarded - never interrupts the projections run.
+    """
+    try:
+        import nba_props_track as T
+    except Exception:
+        return
+    try:
+        have = T.tracked_dates()
+        targets = [d for d in T.gradeable_dates() if d not in have]
+        if not targets:
+            print("  Tracker: up to date (no newly-settled slates).")
+            return
+        added_days = added_rows = 0
+        for ymd in targets:
+            rows = T.grade_date(ymd)
+            if rows:
+                T.append_rows(rows)
+                added_days += 1
+                added_rows += len(rows)
+        if added_days:
+            print(f"  Tracker: graded {added_days} newly-settled day(s), "
+                  f"+{added_rows} picks -> {T.TRACKER.name}")
+        else:
+            print("  Tracker: up to date (prior slates not final yet).")
+    except Exception as e:
+        print(f"  Tracker update skipped: {e}")
 
 
 # ── 11. PDF report generation ─────────────────────────────────────────────
