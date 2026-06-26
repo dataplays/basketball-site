@@ -265,6 +265,49 @@ def attach_fair(games: list, kappa: float, by_liability: bool = False) -> list:
     return out
 
 
+VALUE_MIN_EV = 0.001    # ignore sub-0.1% "edges" (rounding noise)
+
+
+def compute_value_bets(book_games: list, px_games: list) -> list:
+    """Sportsbook outcomes that are +EV vs ProphetX's no-vig fair line.
+
+    De-vig each ProphetX market (normalize 1/decimal across its sides) -> fair
+    prob per (header, sel); then for the book's same market+side, EV% =
+    fair_prob * book_decimal - 1. Only markets/lines ProphetX also prices match
+    (moneyline always; spreads/totals/props where ProphetX has the same line).
+    """
+    px_by_fix = {g["fixture_id"]: g for g in px_games}
+    bets = []
+    for bg in book_games:
+        pg = px_by_fix.get(bg["fixture_id"])
+        if not pg:
+            continue
+        px_fair: dict = {}
+        for m in pg["markets"]:
+            inv = [(o["sel"], 1.0 / o["decimal"]) for o in m["outcomes"]
+                   if o["decimal"] > 1]
+            s = sum(v for _, v in inv)
+            if s <= 0 or len(inv) < 2:
+                continue
+            for sel, v in inv:
+                px_fair[(m["header"], sel)] = v / s
+        for m in bg["markets"]:
+            for o in m["outcomes"]:
+                fp = px_fair.get((m["header"], o["sel"]))
+                if fp is None or o["decimal"] <= 1:
+                    continue
+                ev = fp * o["decimal"] - 1.0
+                if ev > VALUE_MIN_EV:
+                    bets.append({
+                        "game": bg["game"], "market": m["header"], "sel": o["sel"],
+                        "book_am": o.get("american"), "fair_prob": round(fp * 100, 1),
+                        "fair_am": px.american_from_prob(fp), "ev": round(ev * 100, 1),
+                        "betslip": o.get("betslip", ""), "live": bg.get("live", False),
+                    })
+    bets.sort(key=lambda b: -b["ev"])
+    return bets
+
+
 def filter_min_limit(games: list, min_limit: float) -> list:
     """Return a copy with sub-threshold prices (and emptied markets) dropped."""
     if min_limit <= 0:
@@ -311,8 +354,15 @@ def api_lines():
         games = filter_min_limit(games, min_limit)
     if book == "prophetx":                # no-vig fair line is ProphetX-only
         games = attach_fair(games, kappa, by_liability)
+    value_bets = []
+    if book in SPORTSBOOKS:               # flag +EV vs the ProphetX no-vig line
+        try:
+            px_games, _ = cached_games(tournament, "prophetx")
+            value_bets = compute_value_bets(games, px_games)
+        except px.OddsPapiError:
+            value_bets = []
     return jsonify(ok=True, updated=ts, book=book, kappa=kappa,
-                   exchange=(book in EXCHANGES),
+                   exchange=(book in EXCHANGES), value_bets=value_bets,
                    count=sum(g["n_lines"] for g in games), games=games)
 
 
@@ -429,6 +479,28 @@ h1 b{color:var(--accent)}
 .cmp td.pos{color:#3fb950}
 .bchip.cmpmode{padding:5px 12px}
 .bchip.cmpmode.active{background:#15c39a22;color:var(--accent);border-color:#15c39a88}
+/* +EV value panel atop sportsbook tabs */
+.valuepanel{background:linear-gradient(180deg,#13251c,#111a16);border:1px solid #1f7a4d55;
+            border-radius:13px;padding:12px 14px;margin-bottom:18px}
+.vhead{font-size:13px;font-weight:700;color:#3fb950;letter-spacing:.3px;margin-bottom:8px;
+       display:flex;align-items:center;gap:8px}
+.vcount{background:#3fb95022;color:#3fb950;border:1px solid #3fb95055;border-radius:999px;
+        padding:1px 9px;font-size:11.5px}
+.vrow{display:grid;grid-template-columns:minmax(150px,1fr) 110px auto;gap:12px;align-items:center;
+      padding:6px 2px;border-top:1px solid #ffffff0d}
+.vlab{font-size:13px;display:flex;flex-direction:column;gap:1px;min-width:0}
+.vlab b{color:var(--txt)}
+.vmkt{color:var(--muted);font-size:11.5px}
+.vgame{color:#6b7685;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vbar{height:8px;background:#0e1320;border-radius:4px;overflow:hidden}
+.vbar i{display:block;height:100%;background:linear-gradient(90deg,#2ea043,#3fb950)}
+.vnum{text-align:right;font-variant-numeric:tabular-nums;font-size:13px;white-space:nowrap;
+      display:flex;align-items:center;justify-content:flex-end;gap:6px}
+.vev{color:#3fb950;font-weight:700}
+.vnum a{color:var(--txt);text-decoration:none}
+.vnum a:hover{color:var(--accent)}
+.vfair{color:var(--muted);font-size:11.5px}
+.vmore{color:var(--muted);font-size:12px;text-align:center;padding-top:8px}
 .cmp td.sub{padding-left:18px;color:#c9d4e3}
 .cmp tr.grp td{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;
                color:var(--accent);font-weight:700;border-top:1px solid var(--line);
@@ -520,7 +592,7 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
   <div class="foot"><b>ProphetX</b> shows the <b>USD available to match right now</b> per price
    (top-of-book) plus a no-vig, &kappa;-shaded fair line. <b>Kalshi</b> shows exchange size
    (moneyline-only). Sportsbooks (<b>Caesars</b>, <b>BetRivers</b>, <b>theScore</b>, <b>FanDuel</b>)
-   post odds only.<br>
+   post odds only, topped with any bets that are <b>+EV vs the ProphetX no-vig line</b>.<br>
    <b>Compare</b> line-shops every market (moneyline, spreads, totals, props) across all books
    side-by-side &mdash; best price highlighted; spreads/totals/props are collapsible.<br>
    Auto-refreshes every 30s. For entertainment/informational use.</div>
@@ -574,7 +646,7 @@ function render(d){
   upd.textContent = d.count+' prices · updated '+t.toLocaleTimeString();
   if(!d.games.length){ box.innerHTML = '<div class="empty">No '+esc(d.book||'')+' basketball with odds right now.</div>'; return; }
 
-  box.innerHTML = d.games.map(g=>{
+  const gamesHtml = d.games.map(g=>{
     let maxL = 1;
     g.markets.forEach(m=>m.outcomes.forEach(o=>{ if(o.limit>maxL) maxL=o.limit; }));
     const lines = g.markets.filter(m=>!m.is_prop);
@@ -601,6 +673,25 @@ function render(d){
       '<span class="gtag">'+esc(g.tournament)+'</span>'+badge+'</div>'+
       sec('Game Lines', lines)+sec('Player Props', props)+'</div>';
   }).join('');
+  box.innerHTML = valueChart(d.value_bets) + gamesHtml;
+}
+
+function valueChart(bets){
+  if(!bets || !bets.length) return '';
+  const max = Math.max.apply(null, bets.map(b=>b.ev));
+  const rows = bets.slice(0,25).map(b=>{
+    const w = Math.max(4, Math.round(b.ev/max*100));
+    const odds = b.betslip ? '<a href="'+b.betslip+'" target="_blank" rel="noopener">'+fmtAm(b.book_am)+'</a>' : fmtAm(b.book_am);
+    return '<div class="vrow"><div class="vlab"><b>'+esc(b.sel)+'</b>'+
+      '<span class="vmkt">'+esc(b.market)+'</span>'+
+      '<span class="vgame">'+esc(b.game)+'</span></div>'+
+      '<div class="vbar"><i style="width:'+w+'%"></i></div>'+
+      '<div class="vnum"><span class="vev">+'+b.ev+'%</span>'+odds+
+      '<span class="vfair">vs '+fmtAm(b.fair_am)+'</span></div></div>';
+  }).join('');
+  const more = bets.length>25 ? '<div class="vmore">+'+(bets.length-25)+' more</div>' : '';
+  return '<div class="valuepanel"><div class="vhead">&#9650; +EV vs ProphetX no-vig'+
+    ' <span class="vcount">'+bets.length+'</span></div>'+rows+more+'</div>';
 }
 
 function renderCompareDispatch(){
