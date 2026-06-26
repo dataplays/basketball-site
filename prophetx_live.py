@@ -44,7 +44,7 @@ BOOKS = EXCHANGES | SPORTSBOOKS
 BOOK_CHIPS = [("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
               ("Caesars", "caesars"), ("BetRivers", "betrivers"),
               ("theScore", "thescore"), ("FanDuel", "fanduel"),
-              ("Compare", "compare")]
+              ("Compare", "compare"), ("Recap", "recap")]
 # Books shown side-by-side in the Compare (line-shopping) grid, column order.
 COMPARE_BOOKS = ["prophetx", "kalshi", "caesars", "betrivers", "thescore", "fanduel"]
 COMPARE_LABELS = {"prophetx": "ProphetX", "kalshi": "Kalshi", "caesars": "Caesars",
@@ -268,32 +268,41 @@ def attach_fair(games: list, kappa: float, by_liability: bool = False) -> list:
 VALUE_MIN_EV = 0.001    # ignore sub-0.1% "edges" (rounding noise)
 
 
-def compute_value_bets(book_games: list, px_games: list) -> list:
-    """Sportsbook outcomes that are +EV vs ProphetX's no-vig fair line.
-
-    De-vig each ProphetX market (normalize 1/decimal across its sides) -> fair
-    prob per (header, sel); then for the book's same market+side, EV% =
-    fair_prob * book_decimal - 1. Only markets/lines ProphetX also prices match
-    (moneyline always; spreads/totals/props where ProphetX has the same line).
-    """
-    px_by_fix = {g["fixture_id"]: g for g in px_games}
-    bets = []
-    for bg in book_games:
-        pg = px_by_fix.get(bg["fixture_id"])
-        if not pg:
-            continue
-        px_fair: dict = {}
-        for m in pg["markets"]:
+def _px_fair_index(px_games: list) -> dict:
+    """fixture_id -> {(header, sel): no-vig fair prob} from ProphetX 2-way markets."""
+    idx = {}
+    for g in px_games:
+        fair = {}
+        for m in g["markets"]:
             inv = [(o["sel"], 1.0 / o["decimal"]) for o in m["outcomes"]
                    if o["decimal"] > 1]
             s = sum(v for _, v in inv)
             if s <= 0 or len(inv) < 2:
                 continue
             for sel, v in inv:
-                px_fair[(m["header"], sel)] = v / s
+                fair[(m["header"], sel)] = v / s
+        idx[g["fixture_id"]] = fair
+    return idx
+
+
+def compute_value_bets(book_games: list, px_games: list = None,
+                       px_index: dict = None) -> list:
+    """Sportsbook outcomes that are +EV vs ProphetX's no-vig fair line.
+
+    EV% = fair_prob * book_decimal - 1, for every market+side ProphetX also
+    prices at the same line (moneyline always; spreads/totals/props where
+    ProphetX overlaps). Pass px_index to reuse a prebuilt fair index (the recap
+    scores several books against one ProphetX slate)."""
+    if px_index is None:
+        px_index = _px_fair_index(px_games or [])
+    bets = []
+    for bg in book_games:
+        fair = px_index.get(bg["fixture_id"])
+        if not fair:
+            continue
         for m in bg["markets"]:
             for o in m["outcomes"]:
-                fp = px_fair.get((m["header"], o["sel"]))
+                fp = fair.get((m["header"], o["sel"]))
                 if fp is None or o["decimal"] <= 1:
                     continue
                 ev = fp * o["decimal"] - 1.0
@@ -381,6 +390,42 @@ def api_compare():
     columns = [[s, COMPARE_LABELS[s]] for s in COMPARE_BOOKS]
     return jsonify(ok=True, updated=ts, columns=columns,
                    count=len(games), games=games)
+
+
+@app.route("/api/recap")
+def api_recap():
+    """Every sportsbook's +EV-vs-ProphetX-no-vig bets, pooled into one list."""
+    if not KEY:
+        return jsonify(ok=False, error="ODDSPAPI_KEY not set on the server."), 200
+    try:
+        tournament = int(request.args.get("tournament", 0) or 0)
+    except ValueError:
+        tournament = 0
+    try:
+        px_games, ts = cached_games(tournament, "prophetx")
+    except px.OddsPapiError as exc:
+        return jsonify(ok=False, error=str(exc)), 200
+    px_index = _px_fair_index(px_games)
+
+    def fetch(slug):
+        try:
+            return slug, cached_games(tournament, slug)
+        except px.OddsPapiError:
+            return slug, ([], 0.0)
+    books = sorted(SPORTSBOOKS)
+    with ThreadPoolExecutor(max_workers=len(books)) as ex:
+        per_book = dict(ex.map(fetch, books))
+
+    bets = []
+    for slug, (games, t) in per_book.items():
+        for b in compute_value_bets(games, px_index=px_index):
+            b["book"] = slug
+            b["book_label"] = COMPARE_LABELS.get(slug, slug)
+            bets.append(b)
+        if t:
+            ts = min(ts, t) if ts else t
+    bets.sort(key=lambda b: -b["ev"])
+    return jsonify(ok=True, updated=ts, count=len(bets), n_books=len(books), bets=bets)
 
 
 @app.route("/api/snapshot", methods=["GET", "POST"])
@@ -490,6 +535,9 @@ h1 b{color:var(--accent)}
       padding:6px 2px;border-top:1px solid #ffffff0d}
 .vlab{font-size:13px;display:flex;flex-direction:column;gap:1px;min-width:0}
 .vlab b{color:var(--txt)}
+.vtop{display:flex;align-items:center;gap:7px}
+.vbook{font-size:10px;font-weight:700;background:#1f6feb22;color:#58a6ff;border:1px solid #1f6feb55;
+       border-radius:5px;padding:1px 7px;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
 .vmkt{color:var(--muted);font-size:11.5px}
 .vgame{color:#6b7685;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .vbar{height:8px;background:#0e1320;border-radius:4px;overflow:hidden}
@@ -595,6 +643,7 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
    post odds only, topped with any bets that are <b>+EV vs the ProphetX no-vig line</b>.<br>
    <b>Compare</b> line-shops every market (moneyline, spreads, totals, props) across all books
    side-by-side &mdash; best price highlighted; spreads/totals/props are collapsible.<br>
+   <b>Recap</b> pools every sportsbook's +EV-vs-ProphetX-no-vig bets into one ranked board.<br>
    Auto-refreshes every 30s. For entertainment/informational use.</div>
 </main>
 <script>
@@ -691,6 +740,29 @@ function valueChart(bets){
   }).join('');
   return '<div class="valuepanel"><div class="vhead">&#9650; +EV vs ProphetX no-vig'+
     ' <span class="vcount">'+bets.length+'</span></div>'+rows+'</div>';
+}
+
+function renderRecap(d){
+  const box = document.getElementById('games');
+  const upd = document.getElementById('upd');
+  if(!d.ok){ box.innerHTML = '<div class="err">'+(d.error||'Error loading')+'</div>'; upd.textContent='error'; return; }
+  const t = new Date(d.updated*1000);
+  upd.textContent = d.count+' +EV bets across '+(d.n_books||0)+' books · vs ProphetX no-vig · updated '+t.toLocaleTimeString();
+  if(!d.bets.length){ box.innerHTML = '<div class="empty">No +EV bets vs the ProphetX no-vig line right now.</div>'; return; }
+  const max = Math.max.apply(null, d.bets.map(b=>b.ev));
+  const rows = d.bets.map(b=>{
+    const w = Math.max(4, Math.round(b.ev/max*100));
+    const odds = b.betslip ? '<a href="'+b.betslip+'" target="_blank" rel="noopener">'+fmtAm(b.book_am)+'</a>' : fmtAm(b.book_am);
+    return '<div class="vrow"><div class="vlab">'+
+      '<div class="vtop"><span class="vbook">'+esc(b.book_label)+'</span><b>'+esc(b.sel)+'</b></div>'+
+      '<span class="vmkt">'+esc(b.market)+'</span>'+
+      '<span class="vgame">'+esc(b.game)+'</span></div>'+
+      '<div class="vbar"><i style="width:'+w+'%"></i></div>'+
+      '<div class="vnum"><span class="vev">+'+b.ev+'%</span>'+odds+
+      '<span class="vfair">vs '+fmtAm(b.fair_am)+'</span></div></div>';
+  }).join('');
+  box.innerHTML = '<div class="valuepanel"><div class="vhead">&#9650; All +EV bets vs ProphetX no-vig'+
+    ' <span class="vcount">'+d.bets.length+'</span></div>'+rows+'</div>';
 }
 
 function renderCompareDispatch(){
@@ -796,6 +868,9 @@ async function load(){
       const r = await fetch('api/compare?tournament='+TID);
       _lastCompare = await r.json();
       renderCompareDispatch();
+    } else if(VIEW==='recap'){
+      const r = await fetch('api/recap?tournament='+TID);
+      renderRecap(await r.json());
     } else {
       const r = await fetch('api/lines?book='+VIEW+'&tournament='+TID+'&min_limit='+MINL+'&kappa='+KAPPA);
       render(await r.json());
