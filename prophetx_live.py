@@ -183,7 +183,8 @@ def api_lines():
         return jsonify(ok=False, error=str(exc)), 200
     if book in EXCHANGES:                 # sportsbooks have no size to filter on
         games = filter_min_limit(games, min_limit)
-    games = attach_fair(games, kappa, by_liability)
+    if book == "prophetx":                # no-vig fair line is ProphetX-only
+        games = attach_fair(games, kappa, by_liability)
     return jsonify(ok=True, updated=ts, book=book, kappa=kappa,
                    exchange=(book in EXCHANGES),
                    count=sum(g["n_lines"] for g in games), games=games)
@@ -366,7 +367,7 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
   <div class="controls">
     __CHIPS__
     <span class="minl">min&nbsp;$<input id="minl" type="number" min="0" step="25" value="0"></span>
-    <span class="minl" title="liquidity shade strength (log-odds); 0 = pure no-vig">&kappa;&nbsp;<input id="kap" type="number" min="-1" max="1" step="0.05" value="0"></span>
+    <span class="minl" id="kapwrap" title="liquidity shade strength (log-odds); 0 = pure no-vig &middot; ProphetX only">&kappa;&nbsp;<input id="kap" type="number" min="-1" max="1" step="0.05" value="0"></span>
   </div>
   <div class="bookrow"><span class="lbl">book</span>__BOOKS__</div>
   <div class="bookrow">
@@ -378,11 +379,11 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
   </div>
 </header>
 <main><div id="games"></div>
-  <div class="foot">Exchanges (<b>ProphetX</b>, <b>Kalshi</b>) show the <b>USD available to
-   match right now</b> per price (top-of-book) plus a &kappa;-shaded fair line.
-   Sportsbooks (<b>Caesars</b>, <b>BetRivers</b>, <b>theScore</b>) post odds only &mdash; shown with a
-   no-vig fair line, no liquidity.<br>
-   <b>Compare</b> pits ProphetX vs Kalshi moneylines (Kalshi is moneyline-only for hoops).<br>
+  <div class="foot"><b>ProphetX</b> shows the <b>USD available to match right now</b> per price
+   (top-of-book) plus a no-vig, &kappa;-shaded fair line. <b>Kalshi</b> shows exchange size
+   (moneyline-only). Sportsbooks (<b>Caesars</b>, <b>BetRivers</b>, <b>theScore</b>, <b>FanDuel</b>)
+   post odds only.<br>
+   <b>Compare</b> pits ProphetX vs Kalshi moneylines.<br>
    Auto-refreshes every 30s. For entertainment/informational use.</div>
 </main>
 <script>
@@ -517,11 +518,15 @@ document.querySelectorAll('.chip').forEach((c,i)=>{
   c.onclick = ()=>{ document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
     c.classList.add('active'); TID = +c.dataset.tid; load(); };
 });
-document.querySelectorAll('.bchip').forEach((c,i)=>{
+function syncControls(){   // kappa shade is ProphetX-only
+  document.getElementById('kapwrap').style.display = (VIEW==='prophetx') ? '' : 'none';
+}
+document.querySelectorAll('.bchip[data-view]').forEach((c,i)=>{
   if(i===0) c.classList.add('active');
-  c.onclick = ()=>{ document.querySelectorAll('.bchip').forEach(x=>x.classList.remove('active'));
-    c.classList.add('active'); VIEW = c.dataset.view; load(); };
+  c.onclick = ()=>{ document.querySelectorAll('.bchip[data-view]').forEach(x=>x.classList.remove('active'));
+    c.classList.add('active'); VIEW = c.dataset.view; syncControls(); load(); };
 });
+syncControls();
 document.getElementById('minl').addEventListener('change', e=>{ MINL = +e.target.value||0; load(); });
 document.getElementById('kap').addEventListener('change', e=>{ KAPPA = +e.target.value||0; load(); });
 
