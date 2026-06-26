@@ -679,7 +679,7 @@ function render(d){
 function valueChart(bets){
   if(!bets || !bets.length) return '';
   const max = Math.max.apply(null, bets.map(b=>b.ev));
-  const rows = bets.slice(0,25).map(b=>{
+  const rows = bets.map(b=>{
     const w = Math.max(4, Math.round(b.ev/max*100));
     const odds = b.betslip ? '<a href="'+b.betslip+'" target="_blank" rel="noopener">'+fmtAm(b.book_am)+'</a>' : fmtAm(b.book_am);
     return '<div class="vrow"><div class="vlab"><b>'+esc(b.sel)+'</b>'+
@@ -689,9 +689,8 @@ function valueChart(bets){
       '<div class="vnum"><span class="vev">+'+b.ev+'%</span>'+odds+
       '<span class="vfair">vs '+fmtAm(b.fair_am)+'</span></div></div>';
   }).join('');
-  const more = bets.length>25 ? '<div class="vmore">+'+(bets.length-25)+' more</div>' : '';
   return '<div class="valuepanel"><div class="vhead">&#9650; +EV vs ProphetX no-vig'+
-    ' <span class="vcount">'+bets.length+'</span></div>'+rows+more+'</div>';
+    ' <span class="vcount">'+bets.length+'</span></div>'+rows+'</div>';
 }
 
 function renderCompareDispatch(){
