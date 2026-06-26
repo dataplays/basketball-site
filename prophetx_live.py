@@ -33,12 +33,13 @@ ACCENT = "#15c39a"
 # get liquidity bars + the kappa-shaded line. Traditional sportsbooks post odds
 # only (no size) -> we show their odds + the no-vig fair line, no bar/shade.
 EXCHANGES = {"prophetx", "kalshi"}
-SPORTSBOOKS = {"caesars", "betrivers", "thescore"}
+SPORTSBOOKS = {"caesars", "betrivers", "thescore", "fanduel"}
 BOOKS = EXCHANGES | SPORTSBOOKS
 # Book selector buttons (label -> view); "compare" is a special PX-vs-Kalshi mode.
 BOOK_CHIPS = [("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
               ("Caesars", "caesars"), ("BetRivers", "betrivers"),
-              ("theScore", "thescore"), ("Compare", "compare")]
+              ("theScore", "thescore"), ("FanDuel", "fanduel"),
+              ("Compare", "compare")]
 
 # Tournament quick-filters shown in the UI (label -> OddsPapi tournamentId, 0=all).
 TOURNAMENTS = [("All", 0), ("WNBA", 486), ("NBA", 132), ("Summer League", 15822)]
