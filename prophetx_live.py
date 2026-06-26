@@ -66,20 +66,20 @@ def cached_games(tournament: int, book: str = "prophetx"):
     return games, now
 
 
-def moneyline_sides(game: dict) -> dict:
-    """team name -> the moneyline outcome dict, or {} if the game has no ML."""
-    for m in game["markets"]:
-        if m.get("mtype") == "moneyline":
-            return {o["sel"]: o for o in m["outcomes"]}
-    return {}
+# Market ordering within a game (game lines first, props last).
+_MTYPE_ORDER = {"moneyline": 0, "1x2": 1, "spreads": 2, "totals": 3,
+                "teamtotals-team1": 4, "teamtotals-team2": 5}
 
 
 def build_compare(tournament: int):
-    """Multi-book moneyline line-shopping across COMPARE_BOOKS.
+    """Multi-book line-shopping across COMPARE_BOOKS for ALL markets.
 
-    fixtureId is OddsPapi's own (book-independent), so it's the join key. A game
-    is included when >=2 books price its moneyline; per side we list each book's
-    price and flag the book offering the best (highest-decimal) number.
+    fixtureId is OddsPapi's own (book-independent) join key; market headers and
+    side labels come from the shared catalog so they match byte-for-byte across
+    books. For each game we group every market (moneyline, spreads, totals, team
+    totals, props) by its header, and within a group compare each side that >=2
+    books price -- flagging the book with the best (highest-decimal) number. A
+    side only two books happen to share the exact same line is comparable.
     """
     def fetch(slug):
         try:
@@ -98,34 +98,49 @@ def build_compare(tournament: int):
 
     out = []
     for fid, meta in meta_by_fix.items():
-        present = {}
+        # header -> {meta, sides: {sel -> {book -> price}}}
+        markets: dict = {}
+        n_books = 0
         for slug in COMPARE_BOOKS:
             g = idx[slug].get(fid)
-            if g:
-                ml = moneyline_sides(g)
-                if ml:
-                    present[slug] = ml
-        if len(present) < 2:
-            continue
-        sides = []
-        for team in (meta["away"], meta["home"]):
-            prices = {}
-            for slug, ml in present.items():
-                o = ml.get(team)
-                if o:
-                    prices[slug] = {"decimal": o["decimal"], "american": o.get("american"),
-                                    "limit": o["limit"], "betslip": o.get("betslip", "")}
-            if not prices:
+            if not g:
                 continue
-            best = max(prices, key=lambda s: prices[s]["decimal"])
-            sides.append({"team": team, "prices": prices, "best": best})
-        if len(sides) >= 2:
-            out.append({
-                "fixture_id": fid, "game": meta["game"],
-                "tournament": meta.get("tournament", ""), "status": meta.get("status", ""),
-                "live": meta.get("live", False), "start_epoch": meta.get("start_epoch"),
-                "sides": sides,
-            })
+            n_books += 1
+            for m in g["markets"]:
+                mk = markets.setdefault(m["header"], {
+                    "header": m["header"], "is_prop": bool(m.get("is_prop")),
+                    "mtype": m.get("mtype", ""), "sides": {}})
+                for o in m["outcomes"]:
+                    mk["sides"].setdefault(o["sel"], {})[slug] = {
+                        "american": o.get("american"), "decimal": o["decimal"],
+                        "limit": o["limit"], "betslip": o.get("betslip", "")}
+        if n_books < 2:
+            continue
+
+        groups = []
+        for mk in markets.values():
+            sides = []
+            for sel, prices in mk["sides"].items():
+                if len(prices) < 2:                 # need 2+ books to compare a price
+                    continue
+                best = max(prices, key=lambda s: prices[s]["decimal"])
+                sides.append({"sel": sel, "prices": prices, "best": best})
+            if not sides:
+                continue
+            sides.sort(key=lambda s: s["sel"])
+            rank = (1 if mk["is_prop"] else 0,
+                    _MTYPE_ORDER.get(mk["mtype"], 8), mk["header"])
+            groups.append((rank, {"header": mk["header"], "mtype": mk["mtype"],
+                                  "is_prop": mk["is_prop"], "sides": sides}))
+        if not groups:
+            continue
+        groups.sort(key=lambda t: t[0])
+        out.append({
+            "fixture_id": fid, "game": meta["game"],
+            "tournament": meta.get("tournament", ""), "status": meta.get("status", ""),
+            "live": meta.get("live", False), "start_epoch": meta.get("start_epoch"),
+            "groups": [g for _, g in groups],
+        })
     out.sort(key=lambda x: (not x["live"], x["start_epoch"] or 0))
     ts = min((t for _, t in per_book.values() if t), default=0.0)
     return out, ts
@@ -317,7 +332,16 @@ h1 b{color:var(--accent)}
           background:#3fb95022;color:#3fb950;border:1px solid #3fb95055}
 .cmpwrap{overflow-x:auto}
 .cmp th,.cmp td{white-space:nowrap}
-.cmp .best{background:#3fb95018;border-radius:5px}
+.cmp .best{background:#3fb95018;border-radius:5px;color:#3fb950;font-weight:700}
+.cmp td.sub{padding-left:18px;color:#c9d4e3}
+.cmp tr.grp td{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+               color:var(--accent);font-weight:700;border-top:1px solid var(--line);
+               padding-top:9px;background:#0e1320}
+.propsdet{margin:0 16px 14px}
+.propsdet summary{cursor:pointer;color:var(--muted);font-size:12.5px;padding:6px 2px;
+                  user-select:none}
+.propsdet summary:hover{color:var(--txt)}
+.propsdet[open] summary{color:var(--txt);font-weight:600}
 /* fair / shaded moneyline table */
 .fair{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:4px}
 .fair th{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);
@@ -396,7 +420,8 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
    (top-of-book) plus a no-vig, &kappa;-shaded fair line. <b>Kalshi</b> shows exchange size
    (moneyline-only). Sportsbooks (<b>Caesars</b>, <b>BetRivers</b>, <b>theScore</b>, <b>FanDuel</b>)
    post odds only.<br>
-   <b>Compare</b> shows the moneyline across all books side-by-side (best price highlighted).<br>
+   <b>Compare</b> line-shops every market (moneyline, spreads, totals, props) across all books
+   side-by-side &mdash; best price highlighted; spreads/totals/props are collapsible.<br>
    Auto-refreshes every 30s. For entertainment/informational use.</div>
 </main>
 <script>
@@ -482,14 +507,13 @@ function renderCompare(d){
   if(!d.ok){ box.innerHTML = '<div class="err">'+(d.error||'Error loading lines')+'</div>'; upd.textContent='error'; return; }
   const cols = d.columns || [];
   const t = new Date(d.updated*1000);
-  upd.textContent = d.count+' games · best moneyline across '+cols.length+' books · updated '+t.toLocaleTimeString();
+  upd.textContent = d.count+' games · best line across '+cols.length+' books · updated '+t.toLocaleTimeString();
   if(!d.games.length){ box.innerHTML = '<div class="empty">No games priced by <b>2+</b> books right now.</div>'; return; }
 
-  const head = '<th class="tm">Side</th>'+cols.map(c=>'<th>'+esc(c[1])+'</th>').join('');
-  box.innerHTML = d.games.map(g=>{
-    const badge = g.live ? '<span class="badge live">Live</span>'
-                         : '<span class="badge pre">'+(g.status||'Upcoming')+'</span>';
-    const rows = g.sides.map(s=>{
+  const head = '<th class="tm">Bet</th>'+cols.map(c=>'<th>'+esc(c[1])+'</th>').join('');
+  const grpRows = grp =>
+    '<tr class="grp"><td class="tm" colspan="'+(cols.length+1)+'">'+esc(grp.header)+'</td></tr>'+
+    grp.sides.map(s=>{
       const cells = cols.map(c=>{
         const p = s.prices[c[0]];
         if(!p) return '<td class="off">—</td>';
@@ -497,12 +521,35 @@ function renderCompare(d){
         const link = p.betslip ? '<a href="'+p.betslip+'" target="_blank" rel="noopener">'+inner+'</a>' : inner;
         return '<td class="'+(s.best===c[0]?'best':'')+'">'+link+'</td>';
       }).join('');
-      return '<tr><td class="tm">'+esc(s.team)+'</td>'+cells+'</tr>';
+      return '<tr><td class="tm sub">'+esc(s.sel)+'</td>'+cells+'</tr>';
     }).join('');
-    return '<div class="game"><div class="ghead"><span class="gteams">'+esc(g.game)+'</span>'+
-      '<span class="gtag">'+esc(g.tournament)+'</span>'+badge+'</div>'+
-      '<div class="sec cmpwrap"><table class="cmp"><thead><tr>'+head+
-      '</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  const tbl = arr => '<table class="cmp"><thead><tr>'+head+'</tr></thead><tbody>'+
+                     arr.map(grpRows).join('')+'</tbody></table>';
+  const catOf = grp => {
+    if(grp.is_prop) return 'props';
+    const t = grp.mtype||'';
+    if(t==='moneyline'||t==='1x2') return 'winners';
+    if(t==='spreads') return 'spreads';
+    if(t==='totals') return 'totals';
+    if(t.indexOf('teamtotal')===0) return 'teamtotals';
+    return 'other';
+  };
+
+  box.innerHTML = d.games.map(g=>{
+    const badge = g.live ? '<span class="badge live">Live</span>'
+                         : '<span class="badge pre">'+(g.status||'Upcoming')+'</span>';
+    const cat = {};
+    g.groups.forEach(grp=>{ const c=catOf(grp); (cat[c]=cat[c]||[]).push(grp); });
+    const det = (key,label)=> cat[key] ? '<details class="propsdet"><summary>'+label+
+      ' ('+cat[key].length+')</summary><div class="sec cmpwrap">'+tbl(cat[key])+
+      '</div></details>' : '';
+    let html = '<div class="game"><div class="ghead"><span class="gteams">'+esc(g.game)+'</span>'+
+      '<span class="gtag">'+esc(g.tournament)+'</span>'+badge+'</div>';
+    if(cat.winners) html += '<div class="sec cmpwrap">'+tbl(cat.winners)+'</div>';
+    html += det('spreads','Spreads')+det('totals','Totals')+
+            det('teamtotals','Team totals')+det('other','Other markets')+
+            det('props','Player props');
+    return html+'</div>';
   }).join('');
 }
 
