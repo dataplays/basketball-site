@@ -46,6 +46,7 @@ def norm(name: str) -> str:
     n = unicodedata.normalize("NFKD", name)
     n = "".join(c for c in n if not unicodedata.combining(c))
     n = n.lower().replace(".", "").replace("'", "").replace("-", " ")
+    n = re.sub(r"\*\d+", "", n)  # drop thin-sample flag (e.g. "*6") if it leaked in
     n = re.sub(r"\b(jr|sr|ii|iii|iv)\b", "", n)
     return re.sub(r"\s+", " ", n).strip()
 
@@ -88,6 +89,7 @@ def parse_top_picks(pdf_path: str, n: int | None = 10) -> list[dict]:
         if idx < 4 or idx + 5 >= len(region):
             continue
         rank, player, tm, game = region[idx - 4], region[idx - 3], region[idx - 2], region[idx - 1]
+        player = re.sub(r"\s*\*\d+\s*$", "", player).strip()  # strip thin-sample flag
         prop = region[idx]
         line_, sim, edge, rec, ev = region[idx + 1:idx + 6]
         if not rank.isdigit():
