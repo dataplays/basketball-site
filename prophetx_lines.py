@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 import time
@@ -53,6 +54,54 @@ TYPE_RANK = {"moneyline": 0, "1x2": 1, "spreads": 2, "totals": 3,
 # Module-level caches (benefit the dashboard's repeated polls).
 _catalog_cache: dict = {}   # sport -> (ts, mkt_by_id, out_name)
 _player_cache: dict = {}    # playerId -> name
+
+
+def american_from_prob(p: float):
+    """Fair American odds from a probability in (0,1); None if out of range."""
+    if not (0.0 < p < 1.0):
+        return None
+    return round(-100 * p / (1 - p)) if p >= 0.5 else round(100 * (1 - p) / p)
+
+
+def fair_no_vig(d_a: float, l_a: float, d_b: float, l_b: float,
+                kappa: float = 0.0, by_liability: bool = True):
+    """Fair (de-vigged) and liquidity-shaded line for a 2-way exchange market.
+
+    d_a/d_b: decimal price offered on each side. l_a/l_b: USD offered on each
+    side. On a P2P exchange each side's offered money is posted by the OPPOSING
+    side, so a big offer on A means capital is positioned on B -> the shade
+    moves the fair line toward the side with LESS money offered. kappa is the
+    shade strength in log-odds units (0 = pure no-vig); by_liability weights the
+    offered stake by the maker's risk, stake*(decimal-1), before comparing.
+
+    Returns a dict of fair/shaded probs + American odds for each side, plus the
+    overround and the liquidity lean (toward A). None if the prices are invalid.
+    """
+    if not (d_a and d_b) or d_a <= 1 or d_b <= 1:
+        return None
+    qa, qb = 1.0 / d_a, 1.0 / d_b
+    s = qa + qb
+    if s <= 0:
+        return None
+    pa = qa / s                                   # de-vigged fair prob of A
+    wa, wb = float(l_a or 0.0), float(l_b or 0.0)
+    if by_liability:
+        wa, wb = wa * (d_a - 1), wb * (d_b - 1)
+    tot = wa + wb
+    lean_a = (wb - wa) / tot if tot > 0 else 0.0  # >0 => shade toward A
+    if 0.0 < pa < 1.0:
+        za = math.log(pa / (1 - pa)) + kappa * lean_a
+        pa_s = 1.0 / (1.0 + math.exp(-za))
+    else:
+        pa_s = pa
+    return {
+        "overround": round(s - 1, 4),
+        "lean_a": round(lean_a, 4),
+        "p_fair_a": pa, "p_fair_b": 1 - pa,
+        "p_shaded_a": pa_s, "p_shaded_b": 1 - pa_s,
+        "fair_a": american_from_prob(pa), "fair_b": american_from_prob(1 - pa),
+        "shaded_a": american_from_prob(pa_s), "shaded_b": american_from_prob(1 - pa_s),
+    }
 
 
 class OddsPapiError(RuntimeError):

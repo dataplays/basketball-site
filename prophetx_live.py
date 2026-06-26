@@ -106,6 +106,32 @@ def build_compare(tournament: int):
     return out, min(ts1, ts2)
 
 
+def attach_fair(games: list, kappa: float, by_liability: bool = False) -> list:
+    """Attach a fair/shaded line to each game's 2-way moneyline market (copy)."""
+    out = []
+    for g in games:
+        markets = []
+        for m in g["markets"]:
+            if m.get("mtype") == "moneyline" and len(m["outcomes"]) == 2:
+                a, b = m["outcomes"]
+                f = px.fair_no_vig(a["decimal"], a["limit"], b["decimal"],
+                                   b["limit"], kappa=kappa, by_liability=by_liability)
+                if f:
+                    m = {**m, "fair": {
+                        "overround": f["overround"], "lean_a": f["lean_a"],
+                        "sides": [
+                            {"sel": a["sel"], "offered": a["american"],
+                             "fair": f["fair_a"], "shaded": f["shaded_a"],
+                             "limit": a["limit"], "betslip": a.get("betslip", "")},
+                            {"sel": b["sel"], "offered": b["american"],
+                             "fair": f["fair_b"], "shaded": f["shaded_b"],
+                             "limit": b["limit"], "betslip": b.get("betslip", "")},
+                        ]}}
+            markets.append(m)
+        out.append({**g, "markets": markets})
+    return out
+
+
 def filter_min_limit(games: list, min_limit: float) -> list:
     """Return a copy with sub-threshold prices (and emptied markets) dropped."""
     if min_limit <= 0:
@@ -139,11 +165,18 @@ def api_lines():
     if book not in BOOKS:
         book = "prophetx"
     try:
+        kappa = float(request.args.get("kappa", 0) or 0)
+    except ValueError:
+        kappa = 0.0
+    kappa = max(-1.0, min(1.0, kappa))
+    by_liability = request.args.get("weight", "stake") == "liability"
+    try:
         games, ts = cached_games(tournament, book)
     except px.OddsPapiError as exc:
         return jsonify(ok=False, error=str(exc)), 200
     games = filter_min_limit(games, min_limit)
-    return jsonify(ok=True, updated=ts, book=book,
+    games = attach_fair(games, kappa, by_liability)
+    return jsonify(ok=True, updated=ts, book=book, kappa=kappa,
                    count=sum(g["n_lines"] for g in games), games=games)
 
 
@@ -235,6 +268,22 @@ h1 b{color:var(--accent)}
 .cmp .best{color:#3fb950;font-weight:700}
 .cmp .win{font-size:10.5px;border-radius:5px;padding:1px 6px;margin-left:6px;
           background:#3fb95022;color:#3fb950;border:1px solid #3fb95055}
+/* fair / shaded moneyline table */
+.fair{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:4px}
+.fair th{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);
+         text-align:right;padding:3px 10px;font-weight:600}
+.fair th.tm{text-align:left}
+.fair td{padding:6px 10px;border-top:1px solid var(--line);text-align:right;
+         font-variant-numeric:tabular-nums}
+.fair td.tm{text-align:left;font-size:13.5px}
+.fair td a{color:inherit;text-decoration:none}
+.fair td a:hover{color:var(--accent)}
+.fair .off{color:var(--muted)}
+.fair .fr{color:var(--txt);font-weight:600}
+.fair .sh{color:var(--accent);font-weight:700}
+.fair .amt{color:var(--money);font-weight:600}
+.fmeta{font-size:11px;color:var(--muted);margin:2px 2px 2px}
+.fmeta b{color:#c9d4e3}
 .minl{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;margin-left:auto}
 .minl input{width:80px;background:var(--row);border:1px solid var(--line);color:var(--txt);
             border-radius:7px;padding:5px 8px;font-size:13px}
@@ -280,6 +329,7 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
   <div class="controls">
     __CHIPS__
     <span class="minl">min&nbsp;$<input id="minl" type="number" min="0" step="25" value="0"></span>
+    <span class="minl" title="liquidity shade strength (log-odds); 0 = pure no-vig">&kappa;&nbsp;<input id="kap" type="number" min="-1" max="1" step="0.05" value="0"></span>
   </div>
   <div class="bookrow"><span class="lbl">book</span>__BOOKS__</div>
   <div class="controls" style="margin-top:8px">
@@ -294,11 +344,34 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
    Auto-refreshes every 30s. For entertainment/informational use.</div>
 </main>
 <script>
-let TID = 0, MINL = 0, VIEW = 'prophetx', busy = false;
+let TID = 0, MINL = 0, KAPPA = 0, VIEW = 'prophetx', busy = false;
 
 function amClass(a){ return a>0 ? '+'+a : ''+a; }
 function amSpan(a){ return (typeof a==='number') ? '<span class="am">'+amClass(a)+'</span>' : ''; }
+function fmtAm(a){ return (typeof a==='number') ? amClass(a) : '—'; }
 function money(n){ return '$'+Math.round(n).toLocaleString(); }
+
+function fairTable(m){
+  const f = m.fair;
+  const rows = f.sides.map(s=>{
+    const href = s.betslip ? ' href="'+s.betslip+'" target="_blank" rel="noopener"' : '';
+    const sel = href ? '<a'+href+'>'+esc(s.sel)+'</a>' : esc(s.sel);
+    return '<tr><td class="tm">'+sel+'</td>'+
+      '<td class="off">'+fmtAm(s.offered)+'</td>'+
+      '<td class="fr">'+fmtAm(s.fair)+'</td>'+
+      '<td class="sh">'+fmtAm(s.shaded)+'</td>'+
+      '<td class="amt">'+money(s.limit)+'</td></tr>';
+  }).join('');
+  const orr = (f.overround*100).toFixed(1);
+  const leanTeam = f.lean_a>0 ? f.sides[0].sel : f.sides[1].sel;
+  const leanTxt = Math.abs(f.lean_a)<0.001 ? 'balanced liquidity'
+                                           : ('money leans <b>'+esc(leanTeam)+'</b>');
+  return '<table class="fair"><thead><tr>'+
+    '<th class="tm">Side</th><th>Offered</th><th>Fair</th><th>Shaded</th><th>$ offered</th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table>'+
+    '<div class="fmeta">overround <b>'+orr+'%</b> &middot; '+leanTxt+
+    ' &middot; &kappa;=<b>'+KAPPA+'</b></div>';
+}
 
 function render(d){
   const box = document.getElementById('games');
@@ -315,8 +388,7 @@ function render(d){
     const props = g.markets.filter(m=>m.is_prop);
     const badge = g.live ? '<span class="badge live">Live</span>'
                          : '<span class="badge pre">'+(g.status||'Upcoming')+'</span>';
-    const mkt = m => '<div class="market"><div class="mhdr">'+esc(m.header)+'</div>'+
-      m.outcomes.map(o=>{
+    const rowsHtml = m => m.outcomes.map(o=>{
         const w = Math.max(4, Math.round(o.limit/maxL*100));
         const am = (typeof o.american==='number') ? '<span class="am">'+amClass(o.american)+'</span>' : '';
         const href = o.betslip ? ' href="'+o.betslip+'" target="_blank" rel="noopener"' : '';
@@ -324,7 +396,9 @@ function render(d){
           '<span class="odds">'+o.decimal+am+'</span>'+
           '<span class="liq"><span class="bar"><i style="width:'+w+'%"></i></span>'+
           '<span class="amt">$'+Math.round(o.limit).toLocaleString()+'</span></span></a>';
-      }).join('')+'</div>';
+      }).join('');
+    const mkt = m => '<div class="market"><div class="mhdr">'+esc(m.header)+'</div>'+
+      (m.fair ? fairTable(m) : rowsHtml(m))+'</div>';
     const sec = (title,arr)=> arr.length ? '<div class="sec"><h3>'+title+'</h3>'+arr.map(mkt).join('')+'</div>' : '';
     return '<div class="game"><div class="ghead"><span class="gteams">'+esc(g.game)+'</span>'+
       '<span class="gtag">'+esc(g.tournament)+'</span>'+badge+'</div>'+
@@ -375,7 +449,7 @@ async function load(){
       const r = await fetch('api/compare?tournament='+TID+'&min_limit='+MINL);
       renderCompare(await r.json());
     } else {
-      const r = await fetch('api/lines?book='+VIEW+'&tournament='+TID+'&min_limit='+MINL);
+      const r = await fetch('api/lines?book='+VIEW+'&tournament='+TID+'&min_limit='+MINL+'&kappa='+KAPPA);
       render(await r.json());
     }
   }catch(e){ document.getElementById('upd').textContent='connection error'; }
@@ -393,6 +467,7 @@ document.querySelectorAll('.bchip').forEach((c,i)=>{
     c.classList.add('active'); VIEW = c.dataset.view; load(); };
 });
 document.getElementById('minl').addEventListener('change', e=>{ MINL = +e.target.value||0; load(); });
+document.getElementById('kap').addEventListener('change', e=>{ KAPPA = +e.target.value||0; load(); });
 load();
 setInterval(load, 30000);
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) load(); });
