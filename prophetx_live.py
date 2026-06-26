@@ -29,21 +29,81 @@ KEY = os.environ.get("ODDSPAPI_KEY", "")
 CACHE_TTL = 25.0           # seconds to reuse an assembled slate
 ACCENT = "#15c39a"
 
+# Books we expose. ProphetX carries the full market depth (spreads/totals/props);
+# Kalshi (via OddsPapi) is MONEYLINE-ONLY for basketball, but with real exchange
+# size -- so the Compare view pits the two books' moneylines head to head.
+BOOKS = {"prophetx", "kalshi"}
+
 # Tournament quick-filters shown in the UI (label -> OddsPapi tournamentId, 0=all).
 TOURNAMENTS = [("All", 0), ("WNBA", 486), ("NBA", 132), ("Summer League", 15822)]
 
 app = Flask(__name__)
-_cache: dict = {}          # tournamentId -> (ts, games)
+_cache: dict = {}          # (tournamentId, book) -> (ts, games)
 
 
-def cached_games(tournament: int):
+def cached_games(tournament: int, book: str = "prophetx"):
     now = time.time()
-    hit = _cache.get(tournament)
+    hit = _cache.get((tournament, book))
     if hit and now - hit[0] < CACHE_TTL:
         return hit[1], hit[0]
-    games = px.gather(KEY, sport=11, tournament=tournament or None, min_limit=0.0)
-    _cache[tournament] = (now, games)
+    games = px.gather(KEY, sport=11, tournament=tournament or None,
+                      book=book, min_limit=0.0)
+    _cache[(tournament, book)] = (now, games)
     return games, now
+
+
+def moneyline_sides(game: dict) -> dict:
+    """team name -> the moneyline outcome dict, or {} if the game has no ML."""
+    for m in game["markets"]:
+        if m.get("mtype") == "moneyline":
+            return {o["sel"]: o for o in m["outcomes"]}
+    return {}
+
+
+def build_compare(tournament: int):
+    """Match ProphetX vs Kalshi on the same fixture and pair up moneylines.
+
+    fixtureId is OddsPapi's own (book-independent), so it's the join key. For each
+    game both books price, we emit one row per side with both books' price + size
+    and mark which book offers the better (higher-decimal) price.
+    """
+    px_games, ts1 = cached_games(tournament, "prophetx")
+    k_games, ts2 = cached_games(tournament, "kalshi")
+    k_by_id = {g["fixture_id"]: g for g in k_games}
+
+    out = []
+    for pg in px_games:
+        kg = k_by_id.get(pg["fixture_id"])
+        if not kg:
+            continue
+        px_ml, k_ml = moneyline_sides(pg), moneyline_sides(kg)
+        if not px_ml or not k_ml:
+            continue
+        sides = []
+        for team in px_ml:
+            po, ko = px_ml.get(team), k_ml.get(team)
+            if not po or not ko:
+                continue
+            pd, kd = po["decimal"], ko["decimal"]
+            best = "tie" if abs(pd - kd) < 1e-9 else ("px" if pd > kd else "k")
+            sides.append({
+                "team": team,
+                "px_decimal": pd, "px_american": po.get("american"),
+                "px_limit": po["limit"], "px_betslip": po.get("betslip", ""),
+                "k_decimal": kd, "k_american": ko.get("american"),
+                "k_limit": ko["limit"],
+                "best": best,
+                "edge_pct": round(abs(pd - kd) / min(pd, kd) * 100, 2),
+            })
+        if len(sides) >= 2:
+            out.append({
+                "fixture_id": pg["fixture_id"], "game": pg["game"],
+                "tournament": pg["tournament"], "status": pg["status"],
+                "live": pg["live"], "start_epoch": pg["start_epoch"],
+                "sides": sides,
+            })
+    out.sort(key=lambda x: (not x["live"], x["start_epoch"] or 0))
+    return out, min(ts1, ts2)
 
 
 def filter_min_limit(games: list, min_limit: float) -> list:
@@ -75,12 +135,40 @@ def api_lines():
         min_limit = float(request.args.get("min_limit", 0) or 0)
     except ValueError:
         min_limit = 0.0
+    book = request.args.get("book", "prophetx")
+    if book not in BOOKS:
+        book = "prophetx"
     try:
-        games, ts = cached_games(tournament)
+        games, ts = cached_games(tournament, book)
     except px.OddsPapiError as exc:
         return jsonify(ok=False, error=str(exc)), 200
     games = filter_min_limit(games, min_limit)
-    return jsonify(ok=True, updated=ts, count=sum(g["n_lines"] for g in games),
+    return jsonify(ok=True, updated=ts, book=book,
+                   count=sum(g["n_lines"] for g in games), games=games)
+
+
+@app.route("/api/compare")
+def api_compare():
+    if not KEY:
+        return jsonify(ok=False, error="ODDSPAPI_KEY not set on the server."), 200
+    try:
+        tournament = int(request.args.get("tournament", 0) or 0)
+    except ValueError:
+        tournament = 0
+    try:
+        min_limit = float(request.args.get("min_limit", 0) or 0)
+    except ValueError:
+        min_limit = 0.0
+    try:
+        games, ts = build_compare(tournament)
+    except px.OddsPapiError as exc:
+        return jsonify(ok=False, error=str(exc)), 200
+    if min_limit > 0:
+        games = [{**g, "sides": [s for s in g["sides"]
+                                 if s["px_limit"] >= min_limit and s["k_limit"] >= min_limit]}
+                 for g in games]
+        games = [g for g in games if len(g["sides"]) >= 1]
+    return jsonify(ok=True, updated=ts, count=sum(len(g["sides"]) for g in games),
                    games=games)
 
 
@@ -98,7 +186,12 @@ def index():
     chips = "".join(
         f'<button class="chip" data-tid="{tid}">{label}</button>'
         for label, tid in TOURNAMENTS)
-    return PAGE.replace("__CHIPS__", chips).replace("__ACCENT__", ACCENT)
+    books = "".join(
+        f'<button class="bchip" data-view="{view}">{label}</button>'
+        for label, view in [("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
+                            ("Compare", "compare")])
+    return (PAGE.replace("__CHIPS__", chips).replace("__BOOKS__", books)
+                .replace("__ACCENT__", ACCENT))
 
 
 PAGE = r"""<!doctype html>
@@ -122,6 +215,26 @@ h1 b{color:var(--accent)}
 .chip{background:var(--row);color:var(--txt);border:1px solid var(--line);
       border-radius:999px;padding:6px 14px;font-size:13px;cursor:pointer}
 .chip.active{background:var(--accent);color:#08130f;border-color:var(--accent);font-weight:600}
+.bchip{background:transparent;color:var(--muted);border:1px solid var(--line);
+       border-radius:8px;padding:6px 13px;font-size:13px;cursor:pointer;font-weight:600}
+.bchip.active{background:#1f6feb22;color:#58a6ff;border-color:#1f6feb88}
+.bookrow{display:flex;gap:8px;align-items:center;margin-top:11px}
+.bookrow .lbl{color:var(--muted);font-size:12px;margin-right:2px}
+/* compare table */
+.cmp{width:100%;border-collapse:collapse;font-size:13px}
+.cmp th{font-size:10.5px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);
+        text-align:right;padding:4px 10px;font-weight:600}
+.cmp th.tm{text-align:left}
+.cmp td{padding:7px 10px;border-top:1px solid var(--line);text-align:right;
+        font-variant-numeric:tabular-nums}
+.cmp td.tm{text-align:left;font-size:13.5px}
+.cmp td a{color:inherit;text-decoration:none}
+.cmp td a:hover{color:var(--accent)}
+.cmp .am{color:var(--muted);font-size:11.5px;margin-left:4px}
+.cmp .amt{color:var(--money);font-weight:600}
+.cmp .best{color:#3fb950;font-weight:700}
+.cmp .win{font-size:10.5px;border-radius:5px;padding:1px 6px;margin-left:6px;
+          background:#3fb95022;color:#3fb950;border:1px solid #3fb95055}
 .minl{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;margin-left:auto}
 .minl input{width:80px;background:var(--row);border:1px solid var(--line);color:var(--txt);
             border-radius:7px;padding:5px 8px;font-size:13px}
@@ -168,19 +281,24 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
     __CHIPS__
     <span class="minl">min&nbsp;$<input id="minl" type="number" min="0" step="25" value="0"></span>
   </div>
+  <div class="bookrow"><span class="lbl">book</span>__BOOKS__</div>
   <div class="controls" style="margin-top:8px">
     <span class="upd"><span class="dot" id="dot"></span><span id="upd">loading&hellip;</span></span>
   </div>
 </header>
 <main><div id="games"></div>
-  <div class="foot">Each price shows the <b>USD available to match right now</b> on the ProphetX
-   exchange. Click any line to open its betslip. Top-of-book per side &bull; not the full ladder.<br>
+  <div class="foot">Each price shows the <b>USD available to match right now</b> on the exchange.
+   Click any line to open its betslip. Top-of-book per side &bull; not the full ladder.<br>
+   <b>Compare</b> pits ProphetX vs Kalshi moneylines (Kalshi is moneyline-only for hoops);
+   the higher decimal price wins each side.<br>
    Auto-refreshes every 30s. For entertainment/informational use.</div>
 </main>
 <script>
-let TID = 0, MINL = 0, busy = false;
+let TID = 0, MINL = 0, VIEW = 'prophetx', busy = false;
 
 function amClass(a){ return a>0 ? '+'+a : ''+a; }
+function amSpan(a){ return (typeof a==='number') ? '<span class="am">'+amClass(a)+'</span>' : ''; }
+function money(n){ return '$'+Math.round(n).toLocaleString(); }
 
 function render(d){
   const box = document.getElementById('games');
@@ -214,14 +332,52 @@ function render(d){
   }).join('');
 }
 
+function renderCompare(d){
+  const box = document.getElementById('games');
+  const upd = document.getElementById('upd');
+  if(!d.ok){ box.innerHTML = '<div class="err">'+(d.error||'Error loading lines')+'</div>'; upd.textContent='error'; return; }
+  const t = new Date(d.updated*1000);
+  upd.textContent = d.count+' sides · ProphetX vs Kalshi · updated '+t.toLocaleTimeString();
+  if(!d.games.length){ box.innerHTML = '<div class="empty">No games priced by <b>both</b> ProphetX and Kalshi right now.</div>'; return; }
+
+  box.innerHTML = d.games.map(g=>{
+    const badge = g.live ? '<span class="badge live">Live</span>'
+                         : '<span class="badge pre">'+(g.status||'Upcoming')+'</span>';
+    const rows = g.sides.map(s=>{
+      const pxWin = s.best==='px' ? '<span class="win">+'+s.edge_pct+'%</span>' : '';
+      const kWin  = s.best==='k'  ? '<span class="win">+'+s.edge_pct+'%</span>' : '';
+      const pxCls = s.best==='px' ? 'best' : '';
+      const kCls  = s.best==='k'  ? 'best' : '';
+      const pxOdds = s.px_betslip
+        ? '<a href="'+s.px_betslip+'" target="_blank" rel="noopener">'+s.px_decimal+amSpan(s.px_american)+'</a>'
+        : s.px_decimal+amSpan(s.px_american);
+      return '<tr><td class="tm">'+esc(s.team)+'</td>'+
+        '<td class="'+pxCls+'">'+pxOdds+pxWin+'</td>'+
+        '<td class="amt">'+money(s.px_limit)+'</td>'+
+        '<td class="'+kCls+'">'+s.k_decimal+amSpan(s.k_american)+kWin+'</td>'+
+        '<td class="amt">'+money(s.k_limit)+'</td></tr>';
+    }).join('');
+    return '<div class="game"><div class="ghead"><span class="gteams">'+esc(g.game)+'</span>'+
+      '<span class="gtag">'+esc(g.tournament)+'</span>'+badge+'</div>'+
+      '<div class="sec"><table class="cmp"><thead><tr>'+
+      '<th class="tm">Side</th><th>ProphetX</th><th>$ size</th><th>Kalshi</th><th>$ size</th>'+
+      '</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
+  }).join('');
+}
+
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 async function load(){
   if(busy || document.hidden) return; busy = true;
   const dot = document.getElementById('dot'); dot.classList.add('on');
   try{
-    const r = await fetch('api/lines?tournament='+TID+'&min_limit='+MINL);
-    render(await r.json());
+    if(VIEW==='compare'){
+      const r = await fetch('api/compare?tournament='+TID+'&min_limit='+MINL);
+      renderCompare(await r.json());
+    } else {
+      const r = await fetch('api/lines?book='+VIEW+'&tournament='+TID+'&min_limit='+MINL);
+      render(await r.json());
+    }
   }catch(e){ document.getElementById('upd').textContent='connection error'; }
   finally{ busy=false; setTimeout(()=>dot.classList.remove('on'), 350); }
 }
@@ -230,6 +386,11 @@ document.querySelectorAll('.chip').forEach((c,i)=>{
   if(i===0) c.classList.add('active');
   c.onclick = ()=>{ document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
     c.classList.add('active'); TID = +c.dataset.tid; load(); };
+});
+document.querySelectorAll('.bchip').forEach((c,i)=>{
+  if(i===0) c.classList.add('active');
+  c.onclick = ()=>{ document.querySelectorAll('.bchip').forEach(x=>x.classList.remove('active'));
+    c.classList.add('active'); VIEW = c.dataset.view; load(); };
 });
 document.getElementById('minl').addEventListener('change', e=>{ MINL = +e.target.value||0; load(); });
 load();
