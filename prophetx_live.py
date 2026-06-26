@@ -20,13 +20,16 @@ from __future__ import annotations
 import argparse
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from flask import Flask, jsonify, request
 
 import prophetx_lines as px
 
 KEY = os.environ.get("ODDSPAPI_KEY", "")
-CACHE_TTL = 25.0           # seconds to reuse an assembled slate
+CACHE_TTL = 35.0           # seconds to reuse a per-book slate (just above the 30s
+                           # client poll so refreshes reuse cache; matters most for
+                           # the Compare view, which fans out to 6 books)
 ACCENT = "#15c39a"
 
 # Books we expose. Exchanges (prophetx/kalshi) carry real `limit` size, so they
@@ -40,6 +43,10 @@ BOOK_CHIPS = [("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
               ("Caesars", "caesars"), ("BetRivers", "betrivers"),
               ("theScore", "thescore"), ("FanDuel", "fanduel"),
               ("Compare", "compare")]
+# Books shown side-by-side in the Compare (line-shopping) grid, column order.
+COMPARE_BOOKS = ["prophetx", "kalshi", "caesars", "betrivers", "thescore", "fanduel"]
+COMPARE_LABELS = {"prophetx": "ProphetX", "kalshi": "Kalshi", "caesars": "Caesars",
+                  "betrivers": "BetRivers", "thescore": "theScore", "fanduel": "FanDuel"}
 
 # Tournament quick-filters shown in the UI (label -> OddsPapi tournamentId, 0=all).
 TOURNAMENTS = [("All", 0), ("WNBA", 486), ("NBA", 132), ("Summer League", 15822)]
@@ -68,49 +75,60 @@ def moneyline_sides(game: dict) -> dict:
 
 
 def build_compare(tournament: int):
-    """Match ProphetX vs Kalshi on the same fixture and pair up moneylines.
+    """Multi-book moneyline line-shopping across COMPARE_BOOKS.
 
-    fixtureId is OddsPapi's own (book-independent), so it's the join key. For each
-    game both books price, we emit one row per side with both books' price + size
-    and mark which book offers the better (higher-decimal) price.
+    fixtureId is OddsPapi's own (book-independent), so it's the join key. A game
+    is included when >=2 books price its moneyline; per side we list each book's
+    price and flag the book offering the best (highest-decimal) number.
     """
-    px_games, ts1 = cached_games(tournament, "prophetx")
-    k_games, ts2 = cached_games(tournament, "kalshi")
-    k_by_id = {g["fixture_id"]: g for g in k_games}
+    def fetch(slug):
+        try:
+            return slug, cached_games(tournament, slug)
+        except px.OddsPapiError:
+            return slug, ([], 0.0)
+    with ThreadPoolExecutor(max_workers=len(COMPARE_BOOKS)) as ex:
+        per_book = dict(ex.map(fetch, COMPARE_BOOKS))
+
+    idx = {slug: {g["fixture_id"]: g for g in games}
+           for slug, (games, _) in per_book.items()}
+    meta_by_fix: dict = {}
+    for slug in COMPARE_BOOKS:                       # prophetx first -> preferred meta
+        for fid, g in idx[slug].items():
+            meta_by_fix.setdefault(fid, g)
 
     out = []
-    for pg in px_games:
-        kg = k_by_id.get(pg["fixture_id"])
-        if not kg:
-            continue
-        px_ml, k_ml = moneyline_sides(pg), moneyline_sides(kg)
-        if not px_ml or not k_ml:
+    for fid, meta in meta_by_fix.items():
+        present = {}
+        for slug in COMPARE_BOOKS:
+            g = idx[slug].get(fid)
+            if g:
+                ml = moneyline_sides(g)
+                if ml:
+                    present[slug] = ml
+        if len(present) < 2:
             continue
         sides = []
-        for team in px_ml:
-            po, ko = px_ml.get(team), k_ml.get(team)
-            if not po or not ko:
+        for team in (meta["away"], meta["home"]):
+            prices = {}
+            for slug, ml in present.items():
+                o = ml.get(team)
+                if o:
+                    prices[slug] = {"decimal": o["decimal"], "american": o.get("american"),
+                                    "limit": o["limit"], "betslip": o.get("betslip", "")}
+            if not prices:
                 continue
-            pd, kd = po["decimal"], ko["decimal"]
-            best = "tie" if abs(pd - kd) < 1e-9 else ("px" if pd > kd else "k")
-            sides.append({
-                "team": team,
-                "px_decimal": pd, "px_american": po.get("american"),
-                "px_limit": po["limit"], "px_betslip": po.get("betslip", ""),
-                "k_decimal": kd, "k_american": ko.get("american"),
-                "k_limit": ko["limit"],
-                "best": best,
-                "edge_pct": round(abs(pd - kd) / min(pd, kd) * 100, 2),
-            })
+            best = max(prices, key=lambda s: prices[s]["decimal"])
+            sides.append({"team": team, "prices": prices, "best": best})
         if len(sides) >= 2:
             out.append({
-                "fixture_id": pg["fixture_id"], "game": pg["game"],
-                "tournament": pg["tournament"], "status": pg["status"],
-                "live": pg["live"], "start_epoch": pg["start_epoch"],
+                "fixture_id": fid, "game": meta["game"],
+                "tournament": meta.get("tournament", ""), "status": meta.get("status", ""),
+                "live": meta.get("live", False), "start_epoch": meta.get("start_epoch"),
                 "sides": sides,
             })
     out.sort(key=lambda x: (not x["live"], x["start_epoch"] or 0))
-    return out, min(ts1, ts2)
+    ts = min((t for _, t in per_book.values() if t), default=0.0)
+    return out, ts
 
 
 def attach_fair(games: list, kappa: float, by_liability: bool = False) -> list:
@@ -199,20 +217,12 @@ def api_compare():
     except ValueError:
         tournament = 0
     try:
-        min_limit = float(request.args.get("min_limit", 0) or 0)
-    except ValueError:
-        min_limit = 0.0
-    try:
         games, ts = build_compare(tournament)
     except px.OddsPapiError as exc:
         return jsonify(ok=False, error=str(exc)), 200
-    if min_limit > 0:
-        games = [{**g, "sides": [s for s in g["sides"]
-                                 if s["px_limit"] >= min_limit and s["k_limit"] >= min_limit]}
-                 for g in games]
-        games = [g for g in games if len(g["sides"]) >= 1]
-    return jsonify(ok=True, updated=ts, count=sum(len(g["sides"]) for g in games),
-                   games=games)
+    columns = [[s, COMPARE_LABELS[s]] for s in COMPARE_BOOKS]
+    return jsonify(ok=True, updated=ts, columns=columns,
+                   count=len(games), games=games)
 
 
 @app.route("/api/snapshot", methods=["GET", "POST"])
@@ -305,6 +315,9 @@ h1 b{color:var(--accent)}
 .cmp .best{color:#3fb950;font-weight:700}
 .cmp .win{font-size:10.5px;border-radius:5px;padding:1px 6px;margin-left:6px;
           background:#3fb95022;color:#3fb950;border:1px solid #3fb95055}
+.cmpwrap{overflow-x:auto}
+.cmp th,.cmp td{white-space:nowrap}
+.cmp .best{background:#3fb95018;border-radius:5px}
 /* fair / shaded moneyline table */
 .fair{width:100%;border-collapse:collapse;font-size:13px;margin-bottom:4px}
 .fair th{font-size:10px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);
@@ -383,7 +396,7 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
    (top-of-book) plus a no-vig, &kappa;-shaded fair line. <b>Kalshi</b> shows exchange size
    (moneyline-only). Sportsbooks (<b>Caesars</b>, <b>BetRivers</b>, <b>theScore</b>, <b>FanDuel</b>)
    post odds only.<br>
-   <b>Compare</b> pits ProphetX vs Kalshi moneylines.<br>
+   <b>Compare</b> shows the moneyline across all books side-by-side (best price highlighted).<br>
    Auto-refreshes every 30s. For entertainment/informational use.</div>
 </main>
 <script>
@@ -467,31 +480,28 @@ function renderCompare(d){
   const box = document.getElementById('games');
   const upd = document.getElementById('upd');
   if(!d.ok){ box.innerHTML = '<div class="err">'+(d.error||'Error loading lines')+'</div>'; upd.textContent='error'; return; }
+  const cols = d.columns || [];
   const t = new Date(d.updated*1000);
-  upd.textContent = d.count+' sides · ProphetX vs Kalshi · updated '+t.toLocaleTimeString();
-  if(!d.games.length){ box.innerHTML = '<div class="empty">No games priced by <b>both</b> ProphetX and Kalshi right now.</div>'; return; }
+  upd.textContent = d.count+' games · best moneyline across '+cols.length+' books · updated '+t.toLocaleTimeString();
+  if(!d.games.length){ box.innerHTML = '<div class="empty">No games priced by <b>2+</b> books right now.</div>'; return; }
 
+  const head = '<th class="tm">Side</th>'+cols.map(c=>'<th>'+esc(c[1])+'</th>').join('');
   box.innerHTML = d.games.map(g=>{
     const badge = g.live ? '<span class="badge live">Live</span>'
                          : '<span class="badge pre">'+(g.status||'Upcoming')+'</span>';
     const rows = g.sides.map(s=>{
-      const pxWin = s.best==='px' ? '<span class="win">+'+s.edge_pct+'%</span>' : '';
-      const kWin  = s.best==='k'  ? '<span class="win">+'+s.edge_pct+'%</span>' : '';
-      const pxCls = s.best==='px' ? 'best' : '';
-      const kCls  = s.best==='k'  ? 'best' : '';
-      const pxOdds = s.px_betslip
-        ? '<a href="'+s.px_betslip+'" target="_blank" rel="noopener">'+s.px_decimal+amSpan(s.px_american)+'</a>'
-        : s.px_decimal+amSpan(s.px_american);
-      return '<tr><td class="tm">'+esc(s.team)+'</td>'+
-        '<td class="'+pxCls+'">'+pxOdds+pxWin+'</td>'+
-        '<td class="amt">'+money(s.px_limit)+'</td>'+
-        '<td class="'+kCls+'">'+s.k_decimal+amSpan(s.k_american)+kWin+'</td>'+
-        '<td class="amt">'+money(s.k_limit)+'</td></tr>';
+      const cells = cols.map(c=>{
+        const p = s.prices[c[0]];
+        if(!p) return '<td class="off">—</td>';
+        const inner = (typeof p.american==='number') ? amClass(p.american) : (''+p.decimal);
+        const link = p.betslip ? '<a href="'+p.betslip+'" target="_blank" rel="noopener">'+inner+'</a>' : inner;
+        return '<td class="'+(s.best===c[0]?'best':'')+'">'+link+'</td>';
+      }).join('');
+      return '<tr><td class="tm">'+esc(s.team)+'</td>'+cells+'</tr>';
     }).join('');
     return '<div class="game"><div class="ghead"><span class="gteams">'+esc(g.game)+'</span>'+
       '<span class="gtag">'+esc(g.tournament)+'</span>'+badge+'</div>'+
-      '<div class="sec"><table class="cmp"><thead><tr>'+
-      '<th class="tm">Side</th><th>ProphetX</th><th>$ size</th><th>Kalshi</th><th>$ size</th>'+
+      '<div class="sec cmpwrap"><table class="cmp"><thead><tr>'+head+
       '</tr></thead><tbody>'+rows+'</tbody></table></div></div>';
   }).join('');
 }
