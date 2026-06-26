@@ -316,6 +316,7 @@ def gather(key: str, sport: int = 11, tournament: int | None = None,
                 "is_prop": is_prop,
                 "mtype": meta.get("marketType", ""),
                 "player": pname,
+                "line": line,
                 "outcomes": outcomes,
             }))
         ranked.sort(key=lambda t: t[0])

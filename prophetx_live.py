@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from statistics import NormalDist
 
 from flask import Flask, jsonify, request
 
@@ -69,6 +71,95 @@ def cached_games(tournament: int, book: str = "prophetx"):
 # Market ordering within a game (game lines first, props last).
 _MTYPE_ORDER = {"moneyline": 0, "1x2": 1, "spreads": 2, "totals": 3,
                 "teamtotals-team1": 4, "teamtotals-team2": 5}
+
+# ── Model-edge comparison for props (Normal(median, sigma), per the median tab) ──
+_STDNORM = NormalDist(0, 1)
+
+
+def _prop_sigma(statkey: str, median: float) -> float:
+    """Game-to-game SD, mirroring median_probabilities.default_sigma."""
+    if statkey == "points":
+        return max(4.0, 0.30 * median)
+    return max(1.8, 0.38 * median)            # rebounds
+
+
+def _stat_key(header: str):
+    """Map a prop header to 'points'/'rebounds' (only stats the model covers)."""
+    if " - " not in header:
+        return None
+    stat = header.split(" - ", 1)[1].rsplit(" ", 1)[0].lower().replace("player ", "").strip()
+    if stat == "points":
+        return "points"
+    if stat == "rebounds":
+        return "rebounds"
+    return None                               # threes/assists/combos -> not modeled
+
+
+def _prop_models(fid: str, idx: dict) -> list:
+    """Normal-model edge comparison for points/rebounds props across books.
+
+    Groups each player+stat across books (even when their LINES differ), fits a
+    consensus median from the books' no-vig prices, and scores every book's
+    over/under by model EV% -- so a worse number at a better price surfaces."""
+    raw: dict = {}                            # (player, statkey) -> {book: {...}}
+    for slug in COMPARE_BOOKS:
+        g = idx[slug].get(fid)
+        if not g:
+            continue
+        for m in g["markets"]:
+            if not m.get("is_prop"):
+                continue
+            line = m.get("line") or 0
+            if line <= 0 or round(line * 2) % 2 == 0:   # need a positive half-integer line
+                continue
+            sk = _stat_key(m["header"])
+            if not sk:
+                continue
+            by = {o["sel"]: o for o in m["outcomes"]}
+            over, under = by.get("Over"), by.get("Under")
+            if not over or not under or over["decimal"] <= 1 or under["decimal"] <= 1:
+                continue
+            raw.setdefault((m.get("player", ""), sk), {})[slug] = {
+                "line": line, "over": over, "under": under}
+
+    models = []
+    for (player, sk), books in raw.items():
+        if len(books) < 2:
+            continue
+        recs = []
+        for slug, b in books.items():
+            io, iu = 1.0 / b["over"]["decimal"], 1.0 / b["under"]["decimal"]
+            recs.append({"book": slug, "line": b["line"],
+                         "od": b["over"]["decimal"], "ud": b["under"]["decimal"],
+                         "q_over": io / (io + iu),
+                         "over": b["over"], "under": b["under"]})
+        med0 = sum(r["line"] for r in recs) / len(recs)
+        sigma = _prop_sigma(sk, med0)
+        m_est = [r["line"] + sigma * _STDNORM.inv_cdf(min(0.99, max(0.01, r["q_over"])))
+                 for r in recs]
+        median = sum(m_est) / len(m_est)
+        sigma = _prop_sigma(sk, median)
+        nd = NormalDist(median, sigma)
+        out = []
+        for r in recs:
+            fair_over = 1.0 - nd.cdf(r["line"])
+            out.append({
+                "book": r["book"], "line": r["line"],
+                "over_am": r["over"].get("american"), "under_am": r["under"].get("american"),
+                "over_ev": round((fair_over * r["od"] - 1) * 100, 1),
+                "under_ev": round(((1 - fair_over) * r["ud"] - 1) * 100, 1),
+                "over_bs": r["over"].get("betslip", ""), "under_bs": r["under"].get("betslip", ""),
+            })
+        out.sort(key=lambda x: x["line"])
+        models.append({
+            "player": player, "stat": sk.capitalize(),
+            "median": round(median, 1), "sigma": round(sigma, 1),
+            "books": out,
+            "best_over": max(out, key=lambda x: x["over_ev"])["book"],
+            "best_under": max(out, key=lambda x: x["under_ev"])["book"],
+        })
+    models.sort(key=lambda m: (m["player"], m["stat"]))
+    return models
 
 
 def build_compare(tournament: int):
@@ -132,7 +223,8 @@ def build_compare(tournament: int):
                     _MTYPE_ORDER.get(mk["mtype"], 8), mk["header"])
             groups.append((rank, {"header": mk["header"], "mtype": mk["mtype"],
                                   "is_prop": mk["is_prop"], "sides": sides}))
-        if not groups:
+        prop_models = _prop_models(fid, idx)
+        if not groups and not prop_models:
             continue
         groups.sort(key=lambda t: t[0])
         out.append({
@@ -140,6 +232,7 @@ def build_compare(tournament: int):
             "tournament": meta.get("tournament", ""), "status": meta.get("status", ""),
             "live": meta.get("live", False), "start_epoch": meta.get("start_epoch"),
             "groups": [g for _, g in groups],
+            "prop_models": prop_models,
         })
     out.sort(key=lambda x: (not x["live"], x["start_epoch"] or 0))
     ts = min((t for _, t in per_book.values() if t), default=0.0)
@@ -333,6 +426,9 @@ h1 b{color:var(--accent)}
 .cmpwrap{overflow-x:auto}
 .cmp th,.cmp td{white-space:nowrap}
 .cmp .best{background:#3fb95018;border-radius:5px;color:#3fb950;font-weight:700}
+.cmp td.pos{color:#3fb950}
+.bchip.cmpmode{padding:5px 12px}
+.bchip.cmpmode.active{background:#15c39a22;color:var(--accent);border-color:#15c39a88}
 .cmp td.sub{padding-left:18px;color:#c9d4e3}
 .cmp tr.grp td{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;
                color:var(--accent);font-weight:700;border-top:1px solid var(--line);
@@ -407,6 +503,11 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
     <span class="minl" id="kapwrap" title="liquidity shade strength (log-odds); 0 = pure no-vig &middot; ProphetX only">&kappa;&nbsp;<input id="kap" type="number" min="-1" max="1" step="0.05" value="0"></span>
   </div>
   <div class="bookrow"><span class="lbl">book</span>__BOOKS__</div>
+  <div class="bookrow" id="cmpmodewrap" style="display:none">
+    <span class="lbl">compare</span>
+    <button class="bchip cmpmode active" data-mode="exact">Exact line</button>
+    <button class="bchip cmpmode" data-mode="model" title="fold differing prop lines onto one normal-model scale and score each book by EV%">Model edge</button>
+  </div>
   <div class="bookrow">
     <button id="snap" class="bchip snap" title="log the current moneylines to prophetx_ml_log.csv for kappa calibration (persists locally)">&#10515; Log snapshot</button>
     <span id="snapst" class="lbl"></span>
@@ -426,6 +527,7 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
 </main>
 <script>
 let TID = 0, MINL = 0, KAPPA = 0, VIEW = 'prophetx', EXCH = true, busy = false;
+let CMPMODE = 'exact', _lastCompare = null;
 
 function amClass(a){ return a>0 ? '+'+a : ''+a; }
 function amSpan(a){ return (typeof a==='number') ? '<span class="am">'+amClass(a)+'</span>' : ''; }
@@ -501,6 +603,47 @@ function render(d){
   }).join('');
 }
 
+function renderCompareDispatch(){
+  if(!_lastCompare) return;
+  (CMPMODE==='model' ? renderCompareModel : renderCompare)(_lastCompare);
+}
+
+function renderCompareModel(d){
+  const box = document.getElementById('games');
+  const upd = document.getElementById('upd');
+  if(!d.ok){ box.innerHTML = '<div class="err">'+(d.error||'Error loading lines')+'</div>'; upd.textContent='error'; return; }
+  const LBL = Object.fromEntries((d.columns||[]).map(c=>c));
+  const t = new Date(d.updated*1000);
+  const games = (d.games||[]).filter(g=>g.prop_models && g.prop_models.length);
+  const tot = games.reduce((a,g)=>a+g.prop_models.length,0);
+  upd.textContent = tot+' prop models · pts/reb EV vs consensus · updated '+t.toLocaleTimeString();
+  if(!games.length){ box.innerHTML = '<div class="empty">No points/rebounds props priced by <b>2+</b> books right now.</div>'; return; }
+  const evtxt = v => (v>0?'+':'')+v+'%';
+  box.innerHTML = games.map(g=>{
+    const badge = g.live ? '<span class="badge live">Live</span>'
+                         : '<span class="badge pre">'+(g.status||'Upcoming')+'</span>';
+    const models = g.prop_models.map(m=>{
+      const rows = m.books.map(b=>{
+        const oA = b.over_bs ? '<a href="'+b.over_bs+'" target="_blank" rel="noopener">'+fmtAm(b.over_am)+'</a>' : fmtAm(b.over_am);
+        const uA = b.under_bs ? '<a href="'+b.under_bs+'" target="_blank" rel="noopener">'+fmtAm(b.under_am)+'</a>' : fmtAm(b.under_am);
+        const oC = (b.book===m.best_over?'best ':'')+(b.over_ev>0?'pos':'');
+        const uC = (b.book===m.best_under?'best ':'')+(b.under_ev>0?'pos':'');
+        return '<tr><td class="tm">'+esc(LBL[b.book]||b.book)+'</td><td>'+b.line+'</td>'+
+          '<td>'+oA+'</td><td class="'+oC+'">'+evtxt(b.over_ev)+'</td>'+
+          '<td>'+uA+'</td><td class="'+uC+'">'+evtxt(b.under_ev)+'</td></tr>';
+      }).join('');
+      return '<div class="market"><div class="mhdr">'+esc(m.player)+' &middot; '+esc(m.stat)+
+        ' <span class="fmeta">model '+m.median+' (σ '+m.sigma+')</span></div>'+
+        '<table class="cmp"><thead><tr><th class="tm">Book</th><th>Line</th>'+
+        '<th>Over</th><th>O EV</th><th>Under</th><th>U EV</th></tr></thead><tbody>'+
+        rows+'</tbody></table></div>';
+    }).join('');
+    return '<div class="game"><div class="ghead"><span class="gteams">'+esc(g.game)+'</span>'+
+      '<span class="gtag">'+esc(g.tournament)+'</span>'+badge+'</div>'+
+      '<div class="sec cmpwrap">'+models+'</div></div>';
+  }).join('');
+}
+
 function renderCompare(d){
   const box = document.getElementById('games');
   const upd = document.getElementById('upd');
@@ -560,8 +703,9 @@ async function load(){
   const dot = document.getElementById('dot'); dot.classList.add('on');
   try{
     if(VIEW==='compare'){
-      const r = await fetch('api/compare?tournament='+TID+'&min_limit='+MINL);
-      renderCompare(await r.json());
+      const r = await fetch('api/compare?tournament='+TID);
+      _lastCompare = await r.json();
+      renderCompareDispatch();
     } else {
       const r = await fetch('api/lines?book='+VIEW+'&tournament='+TID+'&min_limit='+MINL+'&kappa='+KAPPA);
       render(await r.json());
@@ -575,9 +719,14 @@ document.querySelectorAll('.chip').forEach((c,i)=>{
   c.onclick = ()=>{ document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
     c.classList.add('active'); TID = +c.dataset.tid; load(); };
 });
-function syncControls(){   // kappa shade is ProphetX-only
+function syncControls(){   // kappa shade is ProphetX-only; mode toggle is Compare-only
   document.getElementById('kapwrap').style.display = (VIEW==='prophetx') ? '' : 'none';
+  document.getElementById('cmpmodewrap').style.display = (VIEW==='compare') ? 'flex' : 'none';
 }
+document.querySelectorAll('.cmpmode').forEach(c=>{
+  c.onclick = ()=>{ document.querySelectorAll('.cmpmode').forEach(x=>x.classList.remove('active'));
+    c.classList.add('active'); CMPMODE = c.dataset.mode; renderCompareDispatch(); };
+});
 document.querySelectorAll('.bchip[data-view]').forEach((c,i)=>{
   if(i===0) c.classList.add('active');
   c.onclick = ()=>{ document.querySelectorAll('.bchip[data-view]').forEach(x=>x.classList.remove('active'));
