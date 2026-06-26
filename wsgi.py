@@ -444,7 +444,7 @@ start_scheduler()
 # Top nav bar: just the live game dashboards. News / Median / Injuries are reached
 # from the landing page's "Tools & Reports" section (and the Tools link below).
 NAV_SHORT = {"nba": "NBA", "wnba": "WNBA", "cbb": "CBB", "wcbb": "WCBB",
-             "nbl": "NBL", "intl": "Intl", "big3": "BIG3", "prophetx": "ProphetX"}
+             "nbl": "NBL", "intl": "Intl", "big3": "BIG3", "prophetx": "Lines"}
 NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "big3", "prophetx"]
 
 INJECT_CSS = (
