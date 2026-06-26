@@ -29,10 +29,16 @@ KEY = os.environ.get("ODDSPAPI_KEY", "")
 CACHE_TTL = 25.0           # seconds to reuse an assembled slate
 ACCENT = "#15c39a"
 
-# Books we expose. ProphetX carries the full market depth (spreads/totals/props);
-# Kalshi (via OddsPapi) is MONEYLINE-ONLY for basketball, but with real exchange
-# size -- so the Compare view pits the two books' moneylines head to head.
-BOOKS = {"prophetx", "kalshi"}
+# Books we expose. Exchanges (prophetx/kalshi) carry real `limit` size, so they
+# get liquidity bars + the kappa-shaded line. Traditional sportsbooks post odds
+# only (no size) -> we show their odds + the no-vig fair line, no bar/shade.
+EXCHANGES = {"prophetx", "kalshi"}
+SPORTSBOOKS = {"caesars", "betrivers", "thescore"}
+BOOKS = EXCHANGES | SPORTSBOOKS
+# Book selector buttons (label -> view); "compare" is a special PX-vs-Kalshi mode.
+BOOK_CHIPS = [("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
+              ("Caesars", "caesars"), ("BetRivers", "betrivers"),
+              ("theScore", "thescore"), ("Compare", "compare")]
 
 # Tournament quick-filters shown in the UI (label -> OddsPapi tournamentId, 0=all).
 TOURNAMENTS = [("All", 0), ("WNBA", 486), ("NBA", 132), ("Summer League", 15822)]
@@ -174,9 +180,11 @@ def api_lines():
         games, ts = cached_games(tournament, book)
     except px.OddsPapiError as exc:
         return jsonify(ok=False, error=str(exc)), 200
-    games = filter_min_limit(games, min_limit)
+    if book in EXCHANGES:                 # sportsbooks have no size to filter on
+        games = filter_min_limit(games, min_limit)
     games = attach_fair(games, kappa, by_liability)
     return jsonify(ok=True, updated=ts, book=book, kappa=kappa,
+                   exchange=(book in EXCHANGES),
                    count=sum(g["n_lines"] for g in games), games=games)
 
 
@@ -246,8 +254,7 @@ def index():
         for label, tid in TOURNAMENTS)
     books = "".join(
         f'<button class="bchip" data-view="{view}">{label}</button>'
-        for label, view in [("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
-                            ("Compare", "compare")])
+        for label, view in BOOK_CHIPS)
     return (PAGE.replace("__CHIPS__", chips).replace("__BOOKS__", books)
                 .replace("__ACCENT__", ACCENT))
 
@@ -336,6 +343,7 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
      background:var(--row);border:1px solid var(--line);border-radius:9px;
      padding:8px 12px;margin-bottom:5px;text-decoration:none;color:inherit}
 .row:hover{border-color:var(--accent)}
+.row.book{grid-template-columns:1fr auto}
 .sel{font-size:13.5px}
 .odds{font-variant-numeric:tabular-nums;font-size:13.5px;text-align:right;white-space:nowrap}
 .odds .am{color:var(--muted);font-size:12px;margin-left:5px}
@@ -369,14 +377,15 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
   </div>
 </header>
 <main><div id="games"></div>
-  <div class="foot">Each price shows the <b>USD available to match right now</b> on the exchange.
-   Click any line to open its betslip. Top-of-book per side &bull; not the full ladder.<br>
-   <b>Compare</b> pits ProphetX vs Kalshi moneylines (Kalshi is moneyline-only for hoops);
-   the higher decimal price wins each side.<br>
+  <div class="foot">Exchanges (<b>ProphetX</b>, <b>Kalshi</b>) show the <b>USD available to
+   match right now</b> per price (top-of-book) plus a &kappa;-shaded fair line.
+   Sportsbooks (<b>Caesars</b>, <b>BetRivers</b>, <b>theScore</b>) post odds only &mdash; shown with a
+   no-vig fair line, no liquidity.<br>
+   <b>Compare</b> pits ProphetX vs Kalshi moneylines (Kalshi is moneyline-only for hoops).<br>
    Auto-refreshes every 30s. For entertainment/informational use.</div>
 </main>
 <script>
-let TID = 0, MINL = 0, KAPPA = 0, VIEW = 'prophetx', busy = false;
+let TID = 0, MINL = 0, KAPPA = 0, VIEW = 'prophetx', EXCH = true, busy = false;
 
 function amClass(a){ return a>0 ? '+'+a : ''+a; }
 function amSpan(a){ return (typeof a==='number') ? '<span class="am">'+amClass(a)+'</span>' : ''; }
@@ -385,16 +394,25 @@ function money(n){ return '$'+Math.round(n).toLocaleString(); }
 
 function fairTable(m){
   const f = m.fair;
-  const rows = f.sides.map(s=>{
-    const href = s.betslip ? ' href="'+s.betslip+'" target="_blank" rel="noopener"' : '';
-    const sel = href ? '<a'+href+'>'+esc(s.sel)+'</a>' : esc(s.sel);
-    return '<tr><td class="tm">'+sel+'</td>'+
-      '<td class="off">'+fmtAm(s.offered)+'</td>'+
-      '<td class="fr">'+fmtAm(s.fair)+'</td>'+
-      '<td class="sh">'+fmtAm(s.shaded)+'</td>'+
-      '<td class="amt">'+money(s.limit)+'</td></tr>';
-  }).join('');
   const orr = (f.overround*100).toFixed(1);
+  const cell = s=>{
+    const href = s.betslip ? ' href="'+s.betslip+'" target="_blank" rel="noopener"' : '';
+    return href ? '<a'+href+'>'+esc(s.sel)+'</a>' : esc(s.sel);
+  };
+  if(!EXCH){   // sportsbook: odds + no-vig fair only (no liquidity to shade)
+    const rows = f.sides.map(s=>'<tr><td class="tm">'+cell(s)+'</td>'+
+      '<td class="off">'+fmtAm(s.offered)+'</td>'+
+      '<td class="fr">'+fmtAm(s.fair)+'</td></tr>').join('');
+    return '<table class="fair"><thead><tr>'+
+      '<th class="tm">Side</th><th>Offered</th><th>Fair (no-vig)</th>'+
+      '</tr></thead><tbody>'+rows+'</tbody></table>'+
+      '<div class="fmeta">overround <b>'+orr+'%</b> &middot; de-vigged fair line</div>';
+  }
+  const rows = f.sides.map(s=>'<tr><td class="tm">'+cell(s)+'</td>'+
+    '<td class="off">'+fmtAm(s.offered)+'</td>'+
+    '<td class="fr">'+fmtAm(s.fair)+'</td>'+
+    '<td class="sh">'+fmtAm(s.shaded)+'</td>'+
+    '<td class="amt">'+money(s.limit)+'</td></tr>').join('');
   const leanTeam = f.lean_a>0 ? f.sides[0].sel : f.sides[1].sel;
   const leanTxt = Math.abs(f.lean_a)<0.001 ? 'balanced liquidity'
                                            : ('money leans <b>'+esc(leanTeam)+'</b>');
@@ -409,9 +427,10 @@ function render(d){
   const box = document.getElementById('games');
   const upd = document.getElementById('upd');
   if(!d.ok){ box.innerHTML = '<div class="err">'+(d.error||'Error loading lines')+'</div>'; upd.textContent='error'; return; }
+  EXCH = (d.exchange !== false);
   const t = new Date(d.updated*1000);
   upd.textContent = d.count+' prices · updated '+t.toLocaleTimeString();
-  if(!d.games.length){ box.innerHTML = '<div class="empty">No ProphetX basketball with odds right now.</div>'; return; }
+  if(!d.games.length){ box.innerHTML = '<div class="empty">No '+esc(d.book||'')+' basketball with odds right now.</div>'; return; }
 
   box.innerHTML = d.games.map(g=>{
     let maxL = 1;
@@ -421,9 +440,13 @@ function render(d){
     const badge = g.live ? '<span class="badge live">Live</span>'
                          : '<span class="badge pre">'+(g.status||'Upcoming')+'</span>';
     const rowsHtml = m => m.outcomes.map(o=>{
-        const w = Math.max(4, Math.round(o.limit/maxL*100));
-        const am = (typeof o.american==='number') ? '<span class="am">'+amClass(o.american)+'</span>' : '';
+        const am = amSpan(o.american);
         const href = o.betslip ? ' href="'+o.betslip+'" target="_blank" rel="noopener"' : '';
+        if(!EXCH){   // sportsbook: odds only, no liquidity column
+          return '<a class="row book"'+href+'><span class="sel">'+esc(o.sel)+'</span>'+
+            '<span class="odds">'+o.decimal+am+'</span></a>';
+        }
+        const w = Math.max(4, Math.round(o.limit/maxL*100));
         return '<a class="row"'+href+'><span class="sel">'+esc(o.sel)+'</span>'+
           '<span class="odds">'+o.decimal+am+'</span>'+
           '<span class="liq"><span class="bar"><i style="width:'+w+'%"></i></span>'+
