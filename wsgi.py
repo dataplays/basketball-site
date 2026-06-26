@@ -79,6 +79,7 @@ LANDING_TOOLS = {
     "news": "Daily basketball & betting brief",
     "median": "Prop median → probability calculator",
     "injuries": "WNBA injury report — 5 sources",
+    "prophetx": "Live exchange odds & money offered — ProphetX + Kalshi",
 }
 
 
@@ -117,7 +118,7 @@ EXTRA_DASHBOARDS = {
     "median_probabilities": ("median", "Median Probabilities"),
     "news_page": ("news", "Court & Cover — Daily Brief"),
     "wnba_injuries": ("injuries", "WNBA Injury Report"),
-    "prophetx_live": ("prophetx", "ProphetX Exchange Lines"),
+    "prophetx_live": ("prophetx", "Current Lines and Odds"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
