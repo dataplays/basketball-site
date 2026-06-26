@@ -104,6 +104,59 @@ def fair_no_vig(d_a: float, l_a: float, d_b: float, l_b: float,
     }
 
 
+# ── moneyline snapshot log (feeds prophetx_fair_backtest.py kappa calibration) ──
+ML_LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                      "prophetx_ml_log.csv")
+ML_LOG_FIELDS = ["ts", "date", "book", "tournament", "away", "home",
+                 "d_away", "l_away", "d_home", "l_home"]
+
+
+def append_ml_snapshot(games: list, book: str = "prophetx", path: str = ML_LOG) -> int:
+    """Append each game's 2-way moneyline (price + offered size per side) to the
+    snapshot log. Returns rows written. Used to accumulate history for kappa
+    calibration. NOTE: write target must be persistent (run locally; Render's
+    filesystem is ephemeral)."""
+    rows = []
+    now = int(time.time())
+    for g in games:
+        ml = next((m for m in g["markets"]
+                   if m.get("mtype") == "moneyline" and len(m["outcomes"]) == 2), None)
+        if not ml:
+            continue
+        by_sel = {o["sel"]: o for o in ml["outcomes"]}
+        a, h = by_sel.get(g["away"]), by_sel.get(g["home"])
+        if not a or not h:
+            continue
+        ep = g.get("start_epoch")
+        date = time.strftime("%Y%m%d", time.localtime(ep)) if ep else ""
+        rows.append({"ts": now, "date": date, "book": book,
+                     "tournament": g.get("tournament", ""),
+                     "away": g["away"], "home": g["home"],
+                     "d_away": a["decimal"], "l_away": a["limit"],
+                     "d_home": h["decimal"], "l_home": h["limit"]})
+    if not rows:
+        return 0
+    new = not os.path.exists(path)
+    with open(path, "a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=ML_LOG_FIELDS)
+        if new:
+            w.writeheader()
+        w.writerows(rows)
+    return len(rows)
+
+
+def ml_log_stats(path: str = ML_LOG) -> dict:
+    """Summary of the snapshot log: distinct games, snapshots, rows, last ts."""
+    if not os.path.exists(path):
+        return {"snapshots": 0, "games": 0, "rows": 0, "last": None}
+    rows = list(csv.DictReader(open(path, encoding="utf-8")))
+    snaps = {r["ts"] for r in rows}
+    games = {(r["date"], r["away"], r["home"]) for r in rows}
+    last = max((int(r["ts"]) for r in rows), default=None)
+    return {"snapshots": len(snaps), "games": len(games),
+            "rows": len(rows), "last": last}
+
+
 class OddsPapiError(RuntimeError):
     pass
 

@@ -205,6 +205,31 @@ def api_compare():
                    games=games)
 
 
+@app.route("/api/snapshot", methods=["GET", "POST"])
+def api_snapshot():
+    """GET -> snapshot-log stats; POST -> log the current slate's moneylines.
+
+    Writes via px.append_ml_snapshot to prophetx_ml_log.csv (feeds the kappa
+    calibration). Persists only where the filesystem does -- run locally."""
+    if not KEY:
+        return jsonify(ok=False, error="ODDSPAPI_KEY not set on the server."), 200
+    if request.method == "GET":
+        return jsonify(ok=True, **px.ml_log_stats())
+    book = request.args.get("book", "prophetx")
+    if book not in BOOKS:
+        book = "prophetx"
+    try:
+        tournament = int(request.args.get("tournament", 0) or 0)
+    except ValueError:
+        tournament = 0
+    try:
+        games, _ = cached_games(tournament, book)
+    except px.OddsPapiError as exc:
+        return jsonify(ok=False, error=str(exc)), 200
+    n = px.append_ml_snapshot(games, book=book)
+    return jsonify(ok=True, logged=n, **px.ml_log_stats())
+
+
 @app.route("/favicon.svg")
 def favicon():
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
@@ -251,6 +276,9 @@ h1 b{color:var(--accent)}
 .bchip{background:transparent;color:var(--muted);border:1px solid var(--line);
        border-radius:8px;padding:6px 13px;font-size:13px;cursor:pointer;font-weight:600}
 .bchip.active{background:#1f6feb22;color:#58a6ff;border-color:#1f6feb88}
+.bchip.snap{color:var(--accent);border-color:#15c39a55}
+.bchip.snap:hover{background:#15c39a18}
+.bchip.snap:disabled{opacity:.55;cursor:default}
 .bookrow{display:flex;gap:8px;align-items:center;margin-top:11px}
 .bookrow .lbl{color:var(--muted);font-size:12px;margin-right:2px}
 /* compare table */
@@ -332,6 +360,10 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
     <span class="minl" title="liquidity shade strength (log-odds); 0 = pure no-vig">&kappa;&nbsp;<input id="kap" type="number" min="-1" max="1" step="0.05" value="0"></span>
   </div>
   <div class="bookrow"><span class="lbl">book</span>__BOOKS__</div>
+  <div class="bookrow">
+    <button id="snap" class="bchip snap" title="log the current moneylines to prophetx_ml_log.csv for kappa calibration (persists locally)">&#10515; Log snapshot</button>
+    <span id="snapst" class="lbl"></span>
+  </div>
   <div class="controls" style="margin-top:8px">
     <span class="upd"><span class="dot" id="dot"></span><span id="upd">loading&hellip;</span></span>
   </div>
@@ -468,6 +500,29 @@ document.querySelectorAll('.bchip').forEach((c,i)=>{
 });
 document.getElementById('minl').addEventListener('change', e=>{ MINL = +e.target.value||0; load(); });
 document.getElementById('kap').addEventListener('change', e=>{ KAPPA = +e.target.value||0; load(); });
+
+function snapTxt(d){
+  const t = d.last ? new Date(d.last*1000).toLocaleTimeString() : '—';
+  return (d.games||0)+' games · '+(d.snapshots||0)+' snaps · last '+t;
+}
+async function snapStats(){
+  try{ const r = await fetch('api/snapshot'); const d = await r.json();
+    if(d.ok) document.getElementById('snapst').textContent = 'log: '+snapTxt(d);
+  }catch(e){}
+}
+document.getElementById('snap').onclick = async ()=>{
+  const b = document.getElementById('snap'), st = document.getElementById('snapst');
+  const book = (VIEW==='kalshi') ? 'kalshi' : 'prophetx';
+  b.disabled = true; const old = b.innerHTML; b.textContent = 'logging…';
+  try{
+    const r = await fetch('api/snapshot?book='+book+'&tournament='+TID, {method:'POST'});
+    const d = await r.json();
+    st.textContent = d.ok ? ('✓ logged '+d.logged+' ('+book+') · '+snapTxt(d))
+                          : ('error: '+(d.error||''));
+  }catch(e){ st.textContent = 'snapshot error'; }
+  finally{ b.disabled = false; b.innerHTML = old; }
+};
+snapStats();
 load();
 setInterval(load, 30000);
 document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) load(); });
