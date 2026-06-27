@@ -386,6 +386,24 @@ def _status_of(ev):
     return "pre", es
 
 
+def _is_incomplete_final(game):
+    """True for a game the feed calls 'Final' that never actually finished.
+
+    A completed BIG3 game is a race to TARGET_SCORE, so the winner's score is
+    always >= TARGET_SCORE (50). A "final" whose top score is below that was
+    suspended/abandoned mid-game -- its score is not a real result. Single source
+    of truth: used both to exclude such games from auto-ratings and to flag them
+    in the UI instead of showing them as an official final.
+    """
+    if game.get("status") != "final":
+        return False
+    hs = game["home"].get("score") or 0
+    as_ = game["away"].get("score") or 0
+    if hs <= 0 and as_ <= 0:        # nothing recorded yet (0-0) -- not "suspended"
+        return False
+    return max(hs, as_) < TARGET_SCORE
+
+
 def normalize_games(raw):
     """Walk the nested feed and return a flat list of normalized game dicts."""
     games = []
@@ -413,7 +431,7 @@ def normalize_games(raw):
                         continue
                 status, es = _status_of(ev)
                 dt = _parse_dt(ev.get("startDate"))
-                games.append({
+                g = {
                     "id": ev.get("eventId"),
                     "status": status,
                     "period": es.get("period", 0),
@@ -427,7 +445,9 @@ def normalize_games(raw):
                     "home": home,
                     "away": away,
                     "proj": None,
-                })
+                }
+                g["incomplete"] = _is_incomplete_final(g)
+                games.append(g)
     return games
 
 
@@ -560,10 +580,8 @@ def compute_ratings_from_games(games, shrink_k=4.0):
         hs, as_ = float(h.get("score") or 0), float(a.get("score") or 0)
         if hs <= 0 and as_ <= 0:        # no real result (0-0)
             continue
-        if max(hs, as_) < TARGET_SCORE:  # incomplete: a real BIG3 final has a
-            continue                     # winner >= 50, so a sub-50 "final" is a
-                                         # suspended/abandoned game -- exclude it
-                                         # so its low score doesn't skew ratings.
+        if _is_incomplete_final(g):     # suspended/abandoned (winner < 50): its
+            continue                    # low score isn't a real result, skip it
         for k, sf, sag in ((h["key"], hs, as_), (a["key"], as_, hs)):
             pf[k] = pf.get(k, 0.0) + sf
             pa[k] = pa.get(k, 0.0) + sag
@@ -721,6 +739,7 @@ def _slim(g):
         "tip": g["tip_str"],
         "venue": g["venue"],
         "event_type": g["event_type"],
+        "incomplete": g.get("incomplete", False),
         "home": _slim_team(g["home"]),
         "away": _slim_team(g["away"]),
         "proj": g["proj"],
@@ -818,6 +837,8 @@ PAGE_HTML = r"""<!DOCTYPE html>
   .badge.live{background:rgba(232,17,45,.15);color:var(--red2);border:1px solid rgba(232,17,45,.4)}
   .badge.pre{background:rgba(78,163,255,.12);color:var(--blu);border:1px solid rgba(78,163,255,.35)}
   .badge.final{background:#2a2c34;color:var(--mut)}
+  .badge.susp{background:rgba(232,160,17,.15);color:#f0b429;border:1px solid rgba(232,160,17,.4)}
+  .suspnote{font-size:11px;color:#f0b429;margin-top:6px}
   .teams{padding:6px 13px 2px}
   .team{display:flex;align-items:center;gap:10px;padding:8px 0}
   .team + .team{border-top:1px dashed var(--line)}
@@ -951,14 +972,20 @@ function card(g){
   let badge, period='';
   if(g.status==='live'){ badge=`<span class="badge live">● LIVE</span>`;
     period = g.status_name? `<span>${g.status_name}</span>`:''; }
-  else if(g.status==='final'){ badge=`<span class="badge final">FINAL</span>`; }
+  else if(g.status==='final'){ badge = g.incomplete
+      ? `<span class="badge susp">SUSPENDED</span>`
+      : `<span class="badge final">FINAL</span>`; }
   else { badge=`<span class="badge pre">${g.tip}</span>`; }
+  const suspNote = (g.status==='final' && g.incomplete)
+    ? `<div class="suspnote">⚠ Suspended before the finish — score is unofficial and excluded from team ratings.</div>`
+    : '';
   return `<div class="card">
     <div class="top">${badge}<span>${g.event_type||''}</span></div>
     <div class="teams">
       ${teamRow(away, winA, favA)}
       ${teamRow(home, winH, favH)}
     </div>
+    ${suspNote}
     ${projBlock(g)}
     ${g.venue?`<div class="meta">${g.venue}</div>`:''}
   </div>`;
