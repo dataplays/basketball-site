@@ -560,6 +560,10 @@ def compute_ratings_from_games(games, shrink_k=4.0):
         hs, as_ = float(h.get("score") or 0), float(a.get("score") or 0)
         if hs <= 0 and as_ <= 0:        # no real result (0-0)
             continue
+        if max(hs, as_) < TARGET_SCORE:  # incomplete: a real BIG3 final has a
+            continue                     # winner >= 50, so a sub-50 "final" is a
+                                         # suspended/abandoned game -- exclude it
+                                         # so its low score doesn't skew ratings.
         for k, sf, sag in ((h["key"], hs, as_), (a["key"], as_, hs)):
             pf[k] = pf.get(k, 0.0) + sf
             pa[k] = pa.get(k, 0.0) + sag
