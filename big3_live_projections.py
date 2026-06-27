@@ -139,8 +139,12 @@ def simulate(score_a, score_b, ppp_a, ppp_b, sims=DEFAULT_SIMS, seed=None):
     a_wins = 0
     sum_margin = 0.0          # home - away, summed for the mean
     sum_total = 0.0
+    sum_win_score = 0.0       # winner's final score (race-to-50 winner)
+    sum_lose_score = 0.0      # loser's final score
     h1_sum_total = 0.0        # first-half (race-to-25) accumulators
     h1_sum_margin = 0.0
+    h1_sum_win = 0.0          # first-half: score of the team that reached 25
+    h1_sum_lose = 0.0
     h1_n = 0
     h1_home_first = 0
 
@@ -166,19 +170,37 @@ def simulate(score_a, score_b, ppp_a, ppp_b, sims=DEFAULT_SIMS, seed=None):
         sum_margin += a - b
         if a > b:
             a_wins += 1
+            sum_win_score += a
+            sum_lose_score += b
+        else:
+            sum_win_score += b
+            sum_lose_score += a
         if ha is not None:
             h1_n += 1
             h1_sum_total += ha + hb
             h1_sum_margin += ha - hb
             if ha >= HALF_SCORE:        # home scored the basket that hit 25
                 h1_home_first += 1
+                h1_sum_win += ha
+                h1_sum_lose += hb
+            else:                       # away reached 25 first
+                h1_sum_win += hb
+                h1_sum_lose += ha
 
     p_a = 100.0 * a_wins / sims
     mean_margin = sum_margin / sims                    # home - away (expected)
     mean_total = sum_total / sims
-    # Self-consistent final: home + away == total, home - away == spread.
-    proj_home = (mean_total + mean_margin) / 2.0
-    proj_away = (mean_total - mean_margin) / 2.0
+    mean_win = sum_win_score / sims                    # winner's score (~50)
+    mean_lose = sum_lose_score / sims                  # loser's score
+    # Realistic final: BIG3 is a race to 50, so the winning team's score is
+    # pinned near 50 -- splitting the total by the (near-zero) mean margin would
+    # show a tied ~45-45 line that never actually occurs. Instead assign the
+    # winner-conditional score (~50) to the more likely winner. Total stays
+    # self-consistent: mean_win + mean_lose == mean_total exactly.
+    if p_a >= 50.0:
+        proj_home, proj_away = mean_win, mean_lose
+    else:
+        proj_home, proj_away = mean_lose, mean_win
     out = {
         "p_home": round(p_a, 1),
         "p_away": round(100.0 - p_a, 1),
@@ -191,12 +213,17 @@ def simulate(score_a, score_b, ppp_a, ppp_b, sims=DEFAULT_SIMS, seed=None):
         "half_actual": already_half,
     }
     if h1_n:                                            # projected first half
-        h1_m = h1_sum_margin / h1_n
         h1_t = h1_sum_total / h1_n
-        out["h1_home"] = int(round((h1_t + h1_m) / 2.0))
-        out["h1_away"] = int(round((h1_t - h1_m) / 2.0))
+        h1_win = h1_sum_win / h1_n                       # team that reached 25 (~25)
+        h1_lose = h1_sum_lose / h1_n
+        p_h1_home = 100.0 * h1_home_first / h1_n         # P(home reaches 25 first)
+        # Same race-to-target logic at the half: the team first to 25 shows ~25.
+        if p_h1_home >= 50.0:
+            out["h1_home"], out["h1_away"] = int(round(h1_win)), int(round(h1_lose))
+        else:
+            out["h1_home"], out["h1_away"] = int(round(h1_lose)), int(round(h1_win))
         out["h1_total"] = int(round(h1_t))
-        out["p_h1_home"] = round(100.0 * h1_home_first / h1_n, 1)
+        out["p_h1_home"] = round(p_h1_home, 1)
     return out
 
 
