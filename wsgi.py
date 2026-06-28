@@ -60,6 +60,7 @@ DASH_COLORS = {
     "injuries": "#e03e3e",
     "prophetx": "#15c39a",
     "pricer": "#a78bfa",
+    "matchup": "#26c6da",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -82,6 +83,7 @@ LANDING_TOOLS = {
     "injuries": "WNBA injury report — 5 sources",
     "prophetx": "Live exchange odds & money offered — ProphetX + Kalshi",
     "pricer": "Fair price for alternate spreads & totals",
+    "matchup": "Last 10 games + head-to-head by team",
 }
 
 
@@ -122,6 +124,7 @@ EXTRA_DASHBOARDS = {
     "wnba_injuries": ("injuries", "WNBA Injury Report"),
     "prophetx_live": ("prophetx", "Current Lines and Odds"),
     "spread_total_calculator": ("pricer", "Spread & Total Pricer"),
+    "matchup_lookup": ("matchup", "Matchup Lookup"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
