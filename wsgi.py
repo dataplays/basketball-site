@@ -117,7 +117,7 @@ TOOLS = discover_tools()
 # Extra Flask dashboards that don't follow the *_live_projections.py naming.
 # Map: module name -> (url path, homepage label)
 EXTRA_DASHBOARDS = {
-    "median_probabilities": ("median", "Median Probabilities"),
+    "median_probabilities": ("median", "Median Props"),
     "news_page": ("news", "Court & Cover — Daily Brief"),
     "wnba_injuries": ("injuries", "WNBA Injury Report"),
     "prophetx_live": ("prophetx", "Current Lines and Odds"),
