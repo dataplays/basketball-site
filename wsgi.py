@@ -61,6 +61,10 @@ DASH_COLORS = {
     "prophetx": "#15c39a",
     "pricer": "#a78bfa",
     "matchup": "#26c6da",
+    "calc": "#ffce54",
+    "spots": "#7e57c2",
+    "hitrate": "#26a69a",
+    "refs": "#ef5350",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -84,6 +88,10 @@ LANDING_TOOLS = {
     "prophetx": "Live exchange odds & money offered — ProphetX + Kalshi",
     "pricer": "Fair price for alternate spreads & totals",
     "matchup": "Last 10 games + head-to-head by team",
+    "calc": "Odds, devig, Kelly, parlay, hedge & free-bet math",
+    "spots": "Rest & schedule spots — B2B, 3-in-4, rest edge",
+    "hitrate": "Player prop hit rates — L5/L10/L20, home/away, vs opp",
+    "refs": "NBA referee tendencies + tonight's crews",
 }
 
 
@@ -125,6 +133,10 @@ EXTRA_DASHBOARDS = {
     "prophetx_live": ("prophetx", "Current Lines and Odds"),
     "spread_total_calculator": ("pricer", "Spread & Total Pricer"),
     "matchup_lookup": ("matchup", "Matchup Lookup"),
+    "betting_calculators": ("calc", "Betting Calculators"),
+    "situational_angles": ("spots", "Situational Spots"),
+    "prop_hitrate": ("hitrate", "Prop Hit-Rate"),
+    "referee_tendencies": ("refs", "Referee Tendencies"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
