@@ -80,7 +80,7 @@ TOOL_REQUIRES = {
 LANDING_TOOLS = {
     "news": "Daily basketball & betting brief",
     "median": "Prop median → probability calculator",
-    "injuries": "WNBA injury report — 5 sources",
+    "injuries": "Injury reports — WNBA, NBA, NCAA Men (merged sources)",
     "prophetx": "Live exchange odds & money offered — ProphetX + Kalshi",
     "pricer": "Fair price for alternate spreads & totals",
     "matchup": "Last 10 games + head-to-head by team",

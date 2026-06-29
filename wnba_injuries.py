@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-r"""wnba_injuries.py - WNBA injury report as a web page (mounted at /injuries).
+r"""wnba_injuries.py - basketball injury reports as a web page (mounted at /injuries).
 
-Aggregates four free, scriptable sources (no API keys):
-  - OFFICIAL (wnba.com): `/api/injury-reports` lists the league's game-day report
-    PDFs (re-issued every 15 min); we parse the latest -> official designations
-    (Out / Questionable / Doubtful / Probable / Available) for teams playing today.
-  - ESPN: `site.api.espn.com/.../wnba/injuries` -> full league list (JSON).
-  - ACTION NETWORK: `__NEXT_DATA__` on the injury page -> full league list (JSON).
-  - COVERS: per-team HTML tables (injuryCollapse{ABBR}) -> full league list.
+One master list per league, merged across every free, scriptable source (no API
+keys). A dropdown at the top selects the league:
 
-(Rotowire was requested too but renders its table via client-side JS with no
-static feed, so it can't be read without a headless browser; left out for now.)
+  - WNBA  : Official (WNBA.com PDF) + ESPN + Action Network + Rotowire + Covers
+  - NBA   : ESPN + Action Network + Rotowire + Covers
+  - NCAA M: Action Network + Rotowire + Covers   (ESPN has no college injuries)
 
-The official report is shown as the primary section; the three full-league
-sources are collapsible. Gathered server-side and cached ~10 min. Standalone:
-`py -3 wnba_injuries.py` (serve) or `--once` (console).
+(Women's NCAA is intentionally omitted: no free source publishes that data.)
+
+Each player appears once with a consolidated status badge and source-attribution
+chips (OFF/ESPN/AN/RW/COV; hover a chip for that source's status). Gathered
+server-side, cached ~10 min per league. Standalone: `py -3 wnba_injuries.py`
+(serve) or `--once [--league nba]` (console).
 """
 
 from __future__ import annotations
@@ -31,7 +30,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
-from flask import Flask, Response
+from flask import Flask, Response, request
 
 try:
     from zoneinfo import ZoneInfo
@@ -41,30 +40,21 @@ except Exception:  # noqa: BLE001
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-ESPN_INJ = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/injuries"
-ESPN_PAGE = "https://www.espn.com/wnba/injuries"
+ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball"
 WNBA_REPORTS = "https://www.wnba.com/api/injury-reports"
 WNBA_PAGE = "https://www.wnba.com/wnba-injury-report"
-AN_PAGE = "https://www.actionnetwork.com/wnba/injury-report"
-COVERS_PAGE = "https://www.covers.com/sport/basketball/wnba/injuries"
-ROTOWIRE_PAGE = "https://www.rotowire.com/wnba/injury-report.php"
-ROTOWIRE_INJ = "https://www.rotowire.com/wnba/tables/injury-report.php?team=ALL&pos=ALL"
 
 app = Flask(__name__)
 
 
-def _http(url: str, timeout: int = 25, raw: bool = False):
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
+def _http(url: str, timeout: int = 25, raw: bool = False, referer: str = ""):
+    headers = {"User-Agent": UA}
+    if referer:
+        headers["Referer"] = referer
+    req = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         data = r.read()
     return data if raw else data.decode("utf-8", "replace")
-
-
-def _group(team_to_players: dict) -> list[dict]:
-    out = [{"team": t, "players": sorted(ps, key=lambda p: p["player"])}
-           for t, ps in team_to_players.items()]
-    out.sort(key=lambda g: g["team"])
-    return out
 
 
 # ── OFFICIAL WNBA report (PDF) ──
@@ -148,13 +138,19 @@ def fetch_official() -> dict:
     return out
 
 
+def _group(team_to_players: dict) -> list[dict]:
+    out = [{"team": t, "players": ps} for t, ps in team_to_players.items()]
+    out.sort(key=lambda g: g["team"])
+    return out
+
+
 # ── ESPN ──
 
-def fetch_espn() -> list[dict]:
+def fetch_espn(path: str) -> list[dict]:
     try:
-        data = json.loads(_http(ESPN_INJ))
+        data = json.loads(_http(f"{ESPN_BASE}/{path}/injuries"))
     except Exception as e:  # noqa: BLE001
-        print("[injuries] ESPN failed:", e, file=sys.stderr)
+        print(f"[injuries] ESPN {path} failed:", e, file=sys.stderr)
         return []
     tm: dict = {}
     for grp in data.get("injuries", []):
@@ -172,17 +168,17 @@ def fetch_espn() -> list[dict]:
 
 # ── Action Network ──
 
-def fetch_actionnetwork() -> list[dict]:
+def fetch_actionnetwork(path: str) -> list[dict]:
     try:
-        h = _http(AN_PAGE)
+        h = _http(f"https://www.actionnetwork.com/{path}/injury-report")
         m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', h, re.DOTALL)
         nd = json.loads(m.group(1))
         injuries = nd["props"]["pageProps"]["injuries"]
     except Exception as e:  # noqa: BLE001
-        print("[injuries] ActionNetwork failed:", e, file=sys.stderr)
+        print(f"[injuries] ActionNetwork {path} failed:", e, file=sys.stderr)
         return []
     tm: dict = {}
-    for it in injuries:
+    for it in injuries or []:
         team = (it.get("team") or {}).get("full_name", "?")
         pl = it.get("player") or {}
         tm.setdefault(team, []).append({
@@ -194,16 +190,7 @@ def fetch_actionnetwork() -> list[dict]:
     return _group(tm)
 
 
-# ── Covers ──
-
-COVERS_ABBR = {
-    "ATL": "Atlanta Dream", "CHI": "Chicago Sky", "CON": "Connecticut Sun",
-    "DAL": "Dallas Wings", "GS": "Golden State Valkyries", "IND": "Indiana Fever",
-    "LV": "Las Vegas Aces", "LA": "Los Angeles Sparks", "MIN": "Minnesota Lynx",
-    "NY": "New York Liberty", "PHO": "Phoenix Mercury", "POR": "Portland Fire",
-    "SEA": "Seattle Storm", "TOR": "Toronto Tempo", "WAS": "Washington Mystics",
-}
-
+# ── Covers (team name read from the page, so it works for any league) ──
 
 def _cells(row_html: str) -> list[str]:
     cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", x))).strip()
@@ -211,17 +198,23 @@ def _cells(row_html: str) -> list[str]:
     return [c for c in cells if c]
 
 
-def fetch_covers() -> list[dict]:
+def fetch_covers(path: str) -> list[dict]:
     try:
-        c = _http(COVERS_PAGE)
+        c = _http(f"https://www.covers.com/sport/{path}/injuries")
     except Exception as e:  # noqa: BLE001
-        print("[injuries] Covers failed:", e, file=sys.stderr)
+        print(f"[injuries] Covers {path} failed:", e, file=sys.stderr)
         return []
+    # Map each collapse key -> full team name from the header ("City<br><span>Nick</span>").
+    name_map: dict = {}
+    for m in re.finditer(
+            r"([A-Za-z][\w.&'/ -]*?)<br>\s*<span>([\w.&'/ -]+?)</span>.*?href=\"#injuryCollapse([A-Za-z0-9]{2,6})\"",
+            c, re.DOTALL):
+        name_map[m.group(3)] = re.sub(r"\s+", " ", f"{m.group(1).strip()} {m.group(2).strip()}").strip()
     out = []
-    for m in re.finditer(r'injuryCollapse([A-Z]{2,3})\b.*?(<table[^>]*>.*?</table>)', c, re.DOTALL):
-        team = COVERS_ABBR.get(m.group(1), m.group(1))
+    for m in re.finditer(r'id="injuryCollapse([A-Za-z0-9]{2,6})"(.*?)(<table[^>]*>.*?</table>)', c, re.DOTALL):
+        team = name_map.get(m.group(1), m.group(1))
         players, cur = [], None
-        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", m.group(2), re.DOTALL):
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", m.group(3), re.DOTALL):
             cells = _cells(row)
             if not cells or cells[0] == "Player":
                 continue
@@ -232,7 +225,7 @@ def fetch_covers() -> list[dict]:
                        "comment": (stat.split(" - ", 1)[1].strip() if " - " in stat else "")}
                 players.append(cur)
             elif len(cells) == 1 and cur is not None and len(cells[0]) > 12:
-                cur["comment"] = cells[0]   # richer news blurb
+                cur["comment"] = cells[0]
         if players:
             out.append({"team": team, "players": players})
     out.sort(key=lambda g: g["team"])
@@ -241,30 +234,18 @@ def fetch_covers() -> list[dict]:
 
 # ── Rotowire (JSON behind the JS table) ──
 
-ROTOWIRE_TEAMS = {
-    "ATL": "Atlanta Dream", "CHI": "Chicago Sky", "CON": "Connecticut Sun",
-    "DAL": "Dallas Wings", "GS": "Golden State Valkyries", "GSV": "Golden State Valkyries",
-    "IND": "Indiana Fever", "LV": "Las Vegas Aces", "LVA": "Las Vegas Aces",
-    "LA": "Los Angeles Sparks", "LAS": "Los Angeles Sparks", "MIN": "Minnesota Lynx",
-    "NY": "New York Liberty", "NYL": "New York Liberty", "PHO": "Phoenix Mercury",
-    "PHX": "Phoenix Mercury", "POR": "Portland Fire", "PRT": "Portland Fire",
-    "SEA": "Seattle Storm", "TOR": "Toronto Tempo", "WAS": "Washington Mystics",
-    "WSH": "Washington Mystics",
-}
-
-
-def fetch_rotowire() -> list[dict]:
-    """Rotowire injuries from the JSON endpoint its JS table loads (needs a Referer)."""
+def fetch_rotowire(path: str) -> list[dict]:
+    """Rotowire injuries from the JSON its JS table loads (needs a Referer)."""
+    ref = f"https://www.rotowire.com/{path}/injury-report.php"
+    url = f"https://www.rotowire.com/{path}/tables/injury-report.php?team=ALL&pos=ALL"
     try:
-        req = urllib.request.Request(ROTOWIRE_INJ, headers={
-            "User-Agent": UA, "Accept": "application/json", "Referer": ROTOWIRE_PAGE})
-        data = json.loads(urllib.request.urlopen(req, timeout=25).read().decode("utf-8", "replace"))
+        data = json.loads(_http(url, referer=ref))
     except Exception as e:  # noqa: BLE001
-        print("[injuries] Rotowire failed:", e, file=sys.stderr)
+        print(f"[injuries] Rotowire {path} failed:", e, file=sys.stderr)
         return []
     tm: dict = {}
     for rec in data:
-        team = ROTOWIRE_TEAMS.get((rec.get("team") or "").upper(), rec.get("team") or "?")
+        team = (rec.get("team") or "?").strip()
         injury = re.sub(r"<[^>]+>", "", str(rec.get("injury") or "")).strip()
         rdate = re.sub(r"<[^>]+>", "", str(rec.get("rDate") or "")).strip()
         comment = injury
@@ -279,89 +260,146 @@ def fetch_rotowire() -> list[dict]:
     return _group(tm)
 
 
-# ── Combine + cache ──
+# ── League configs ──
 
-def gather() -> dict:
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        f_off = ex.submit(fetch_official)
-        f_espn = ex.submit(fetch_espn)
-        f_an = ex.submit(fetch_actionnetwork)
-        f_cov = ex.submit(fetch_covers)
-        f_rw = ex.submit(fetch_rotowire)
-        official = f_off.result()
-        sources = [
-            ("ESPN", ESPN_PAGE, f_espn.result()),
-            ("Action Network", AN_PAGE, f_an.result()),
-            ("Rotowire", ROTOWIRE_PAGE, f_rw.result()),
-            ("Covers", COVERS_PAGE, f_cov.result()),
-        ]
-    now = datetime.now(ET) if ET else datetime.now()
-    return {"official": official, "sources": sources, "generated_at": now}
-
-
-_TTL = 600
-_cache: dict = {"ts": 0.0, "data": None}
-_lock = threading.Lock()
-
-
-def get_data() -> dict:
-    now = time.time()
-    if _cache["data"] is not None and now - _cache["ts"] < _TTL:
-        return _cache["data"]
-    with _lock:
-        if _cache["data"] is not None and time.time() - _cache["ts"] < _TTL:
-            return _cache["data"]
-        try:
-            _cache["data"] = gather()
-            _cache["ts"] = time.time()
-        except Exception as e:  # noqa: BLE001
-            print("[injuries] gather failed:", e, file=sys.stderr)
-            if _cache["data"] is None:
-                _cache["data"] = {"official": {"entries": [], "error": str(e)},
-                                  "sources": [], "generated_at": datetime.now(ET) if ET else datetime.now()}
-    return _cache["data"]
-
-
-threading.Thread(target=lambda: get_data(), name="inj-warm", daemon=True).start()
-
-
-# ── Merge all sources into one master per-player list ──
-
-SRC_ABBR = {"ESPN": "ESPN", "Action Network": "AN", "Rotowire": "RW", "Covers": "COV"}
-SOURCE_ORDER = ["OFF", "ESPN", "AN", "RW", "COV"]
-SOURCE_NAMES = {
-    "OFF": "Official game-day report (WNBA.com)", "ESPN": "ESPN",
-    "AN": "Action Network", "RW": "Rotowire", "COV": "Covers",
-}
-NAME_PRIORITY = ["ESPN", "AN", "OFF", "COV", "RW"]   # which source's name to display
-_NAME_SUFFIX = {"jr", "sr", "ii", "iii", "iv", "v"}
-
-# Canonical team by a unique nickname keyword (sources spell team names differently).
-_TEAM_KEYWORDS = {
+_WNBA_KW = {
     "dream": "Atlanta Dream", "sky": "Chicago Sky", "sun": "Connecticut Sun",
     "wings": "Dallas Wings", "valkyr": "Golden State Valkyries", "fever": "Indiana Fever",
     "aces": "Las Vegas Aces", "spark": "Los Angeles Sparks", "lynx": "Minnesota Lynx",
     "liberty": "New York Liberty", "mercury": "Phoenix Mercury", "fire": "Portland Fire",
     "storm": "Seattle Storm", "tempo": "Toronto Tempo", "mystic": "Washington Mystics",
 }
+_WNBA_ABBR = {
+    "ATL": "Atlanta Dream", "CHI": "Chicago Sky", "CON": "Connecticut Sun",
+    "DAL": "Dallas Wings", "GS": "Golden State Valkyries", "GSV": "Golden State Valkyries",
+    "IND": "Indiana Fever", "LV": "Las Vegas Aces", "LVA": "Las Vegas Aces",
+    "LA": "Los Angeles Sparks", "LAS": "Los Angeles Sparks", "MIN": "Minnesota Lynx",
+    "NY": "New York Liberty", "NYL": "New York Liberty", "PHO": "Phoenix Mercury",
+    "PHX": "Phoenix Mercury", "POR": "Portland Fire", "PRT": "Portland Fire",
+    "SEA": "Seattle Storm", "TOR": "Toronto Tempo", "WAS": "Washington Mystics",
+    "WSH": "Washington Mystics",
+}
 
-# Status severity for picking a consolidated badge + flagging disagreements.
+_NBA_LIST = [
+    ("ATL", "Atlanta Hawks", "hawks"), ("BOS", "Boston Celtics", "celtics"),
+    ("BKN", "Brooklyn Nets", "nets"), ("CHA", "Charlotte Hornets", "hornets"),
+    ("CHI", "Chicago Bulls", "bulls"), ("CLE", "Cleveland Cavaliers", "cavaliers"),
+    ("DAL", "Dallas Mavericks", "mavericks"), ("DEN", "Denver Nuggets", "nuggets"),
+    ("DET", "Detroit Pistons", "pistons"), ("GSW", "Golden State Warriors", "warriors"),
+    ("HOU", "Houston Rockets", "rockets"), ("IND", "Indiana Pacers", "pacers"),
+    ("LAC", "LA Clippers", "clippers"), ("LAL", "Los Angeles Lakers", "lakers"),
+    ("MEM", "Memphis Grizzlies", "grizzlies"), ("MIA", "Miami Heat", "heat"),
+    ("MIL", "Milwaukee Bucks", "bucks"), ("MIN", "Minnesota Timberwolves", "timberwolves"),
+    ("NOP", "New Orleans Pelicans", "pelicans"), ("NYK", "New York Knicks", "knicks"),
+    ("OKC", "Oklahoma City Thunder", "thunder"), ("ORL", "Orlando Magic", "magic"),
+    ("PHI", "Philadelphia 76ers", "76ers"), ("PHX", "Phoenix Suns", "suns"),
+    ("POR", "Portland Trail Blazers", "blazers"), ("SAC", "Sacramento Kings", "kings"),
+    ("SAS", "San Antonio Spurs", "spurs"), ("TOR", "Toronto Raptors", "raptors"),
+    ("UTA", "Utah Jazz", "jazz"), ("WAS", "Washington Wizards", "wizards"),
+]
+_NBA_KW = {kw: full for _ab, full, kw in _NBA_LIST}
+_NBA_ABBR = {ab: full for ab, full, _kw in _NBA_LIST}
+_NBA_ABBR.update({"BRK": "Brooklyn Nets", "NO": "New Orleans Pelicans", "NOR": "New Orleans Pelicans",
+                  "NY": "New York Knicks", "GS": "Golden State Warriors", "SA": "San Antonio Spurs",
+                  "PHO": "Phoenix Suns", "WSH": "Washington Wizards", "UTAH": "Utah Jazz",
+                  "CHO": "Charlotte Hornets"})
+
+LEAGUES = {
+    "wnba": {"label": "WNBA", "accent": "#e03e3e", "grouped": True, "match_team": True,
+             "espn": "wnba", "an": "wnba", "covers": "basketball/wnba", "rw": "wnba",
+             "official": True, "kw": _WNBA_KW, "abbr": _WNBA_ABBR},
+    "nba": {"label": "NBA", "accent": "#1d8fe0", "grouped": True, "match_team": True,
+            "espn": "nba", "an": "nba", "covers": "basketball/nba", "rw": "basketball",
+            "official": False, "kw": _NBA_KW, "abbr": _NBA_ABBR},
+    "ncaam": {"label": "NCAA Men", "accent": "#f08c00", "grouped": False, "match_team": False,
+              "espn": None, "an": "ncaab", "covers": "basketball/ncaab", "rw": "cbasketball",
+              "official": False, "kw": {}, "abbr": {}, "team_priority": ["RW", "AN", "COV"]},
+}
+DEFAULT_LEAGUE = "wnba"
+
+
+# ── Combine + cache (per league) ──
+
+def gather(league: str) -> dict:
+    cfg = LEAGUES[league]
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        futs = {}
+        if cfg["official"]:
+            futs["OFF"] = ex.submit(fetch_official)
+        if cfg["espn"]:
+            futs["ESPN"] = ex.submit(fetch_espn, cfg["espn"])
+        if cfg["an"]:
+            futs["AN"] = ex.submit(fetch_actionnetwork, cfg["an"])
+        if cfg["rw"]:
+            futs["RW"] = ex.submit(fetch_rotowire, cfg["rw"])
+        if cfg["covers"]:
+            futs["COV"] = ex.submit(fetch_covers, cfg["covers"])
+        res = {k: f.result() for k, f in futs.items()}
+    official = res.get("OFF", {"date_label": "", "report_label": "", "entries": [], "error": ""})
+    src_lists = {k: res[k] for k in ("ESPN", "AN", "RW", "COV") if k in res}
+    now = datetime.now(ET) if ET else datetime.now()
+    return {"league": league, "official": official, "src_lists": src_lists, "generated_at": now}
+
+
+_TTL = 600
+_caches: dict = {}        # league -> {"ts":..., "data":...}
+_lock = threading.Lock()
+
+
+def get_data(league: str) -> dict:
+    now = time.time()
+    c = _caches.setdefault(league, {"ts": 0.0, "data": None})
+    if c["data"] is not None and now - c["ts"] < _TTL:
+        return c["data"]
+    with _lock:
+        c = _caches[league]
+        if c["data"] is not None and time.time() - c["ts"] < _TTL:
+            return c["data"]
+        try:
+            c["data"] = gather(league)
+            c["ts"] = time.time()
+        except Exception as e:  # noqa: BLE001
+            print("[injuries] gather failed:", e, file=sys.stderr)
+            if c["data"] is None:
+                c["data"] = {"league": league, "official": {"entries": [], "error": str(e)},
+                             "src_lists": {}, "generated_at": datetime.now(ET) if ET else datetime.now()}
+    return c["data"]
+
+
+threading.Thread(target=lambda: get_data(DEFAULT_LEAGUE), name="inj-warm", daemon=True).start()
+
+
+# ── Merge all sources into one master per-player list ──
+
+SOURCE_ORDER = ["OFF", "ESPN", "AN", "RW", "COV"]
+SOURCE_NAMES = {
+    "OFF": "Official game-day report (WNBA.com)", "ESPN": "ESPN",
+    "AN": "Action Network", "RW": "Rotowire", "COV": "Covers",
+}
+NAME_PRIORITY = ["ESPN", "AN", "OFF", "COV", "RW"]
+_NAME_SUFFIX = {"jr", "sr", "ii", "iii", "iv", "v"}
 _SEVERITY = [(("out", "season"), 5), (("doubt",), 4),
              (("quest", "game time", "gtd", "day"), 3), (("prob",), 2), (("avail",), 1)]
 
 
-def _canon_team(s: str) -> str:
-    low = (s or "").lower()
-    for kw, full in _TEAM_KEYWORDS.items():
+def _canon_team(s: str, cfg: dict) -> str:
+    s = (s or "").strip()
+    if not s:
+        return "?"
+    abbr = cfg.get("abbr") or {}
+    if s.upper() in abbr:
+        return abbr[s.upper()]
+    low = s.lower()
+    for kw, full in (cfg.get("kw") or {}).items():
         if kw in low:
             return full
-    return (s or "?").strip()
+    return s
 
 
 def _canon_name(s: str) -> str:
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(c for c in s if not unicodedata.combining(c)).lower()
-    s = re.sub(r"[^a-z0-9 ]", " ", s)              # drop apostrophes/periods/hyphens
+    s = re.sub(r"[^a-z0-9 ]", " ", s)
     return " ".join(t for t in s.split() if t not in _NAME_SUFFIX)
 
 
@@ -373,17 +411,24 @@ def _sev(status: str) -> int:
     return 0
 
 
-def _add_player(records: dict, src: str, team, name, pos, status, comment) -> None:
+def _pretty_status(status: str) -> str:
+    s = (status or "").replace("_", " ").strip()
+    return s.title() if s and s == s.lower() else s
+
+
+def _add_player(records: dict, cfg: dict, src: str, team, name, pos, status, comment) -> None:
     cn = _canon_name(name)
     if not cn:
         return
-    key = (_canon_team(team), cn)
+    key = (_canon_team(team, cfg), cn) if cfg["match_team"] else cn
     rec = records.get(key)
     if rec is None:
-        rec = {"team": _canon_team(team), "cn": cn, "pos": "", "names": {}, "src": {}}
+        rec = {"cn": cn, "pos": "", "names": {}, "teams": {}, "src": {}}
         records[key] = rec
     rec["src"][src] = {"status": (status or "").strip(), "comment": (comment or "").strip()}
     rec["names"][src] = str(name).strip()
+    if team:
+        rec["teams"][src] = str(team).strip()
     if pos and not rec["pos"]:
         rec["pos"] = str(pos).strip()
 
@@ -395,44 +440,21 @@ def _display_name(rec: dict) -> str:
     return next(iter(rec["names"].values()), "Unknown")
 
 
-def _pretty_status(status: str) -> str:
-    """Normalize a source's status string for display (day_to_day -> Day To Day)."""
-    s = (status or "").replace("_", " ").strip()
-    return s.title() if s and s == s.lower() else s
-
-
-def _merge_initials(records: dict) -> None:
-    """Fold abbreviated-first-name records (Covers' 'B. Jones') into the matching
-    full-name record on the same team (same last name, first initial matches)."""
-    by_team: dict = {}
-    for rec in records.values():
-        by_team.setdefault(rec["team"], []).append(rec)
-    merged_keys = set()
-    for recs in by_team.values():
-        fulls = [r for r in recs if len(r["cn"].split()[0]) > 1] if recs else []
-        for rec in recs:
-            toks = rec["cn"].split()
-            if len(toks) < 2 or len(toks[0]) != 1:
-                continue                                  # only single-initial records
-            initial, last = toks[0], toks[-1]
-            target = next((f for f in fulls if f is not rec
-                           and f["cn"].split()[-1] == last
-                           and f["cn"].split()[0].startswith(initial)), None)
-            if target is None:
-                continue
-            for s, info in rec["src"].items():
-                target["src"].setdefault(s, info)
-                target["names"].setdefault(s, rec["names"].get(s, ""))
-            if not target["pos"] and rec["pos"]:
-                target["pos"] = rec["pos"]
-            merged_keys.add((rec["team"], rec["cn"]))
-    for k in merged_keys:
-        records.pop(k, None)
+def _display_team(rec: dict, cfg: dict) -> str:
+    if cfg["match_team"]:
+        for s in SOURCE_ORDER:
+            if rec["teams"].get(s):
+                return _canon_team(rec["teams"][s], cfg)
+        return "?"
+    for s in cfg.get("team_priority", ["AN", "COV", "RW", "ESPN", "OFF"]):
+        if rec["teams"].get(s):
+            return rec["teams"][s]
+    return next(iter(rec["teams"].values()), "?")
 
 
 def _consolidate_status(rec: dict) -> str:
     off = rec["src"].get("OFF", {}).get("status")
-    if off:                                        # official is authoritative
+    if off:
         return _pretty_status(off)
     best, best_rank = "", -1
     for s in rec["src"].values():
@@ -449,30 +471,70 @@ def _best_comment(rec: dict) -> str:
     return max(cands, key=len) if cands else ""
 
 
+def _merge_initials(records: dict, cfg: dict) -> None:
+    """Fold abbreviated-first-name records ('B. Jones') into the full-name record
+    on the same canonical team (same last name, first initial). Team-matched
+    leagues only (needs a reliable team to scope the match)."""
+    by_team: dict = {}
+    for key, rec in records.items():
+        by_team.setdefault(_display_team(rec, cfg), []).append((key, rec))
+    drop = set()
+    for recs in by_team.values():
+        fulls = [r for _k, r in recs if len(r["cn"].split()[0]) > 1]
+        for key, rec in recs:
+            toks = rec["cn"].split()
+            if len(toks) < 2 or len(toks[0]) != 1:
+                continue
+            initial, last = toks[0], toks[-1]
+            target = next((f for f in fulls if f is not rec
+                           and f["cn"].split()[-1] == last
+                           and f["cn"].split()[0].startswith(initial)), None)
+            if target is None:
+                continue
+            for s, info in rec["src"].items():
+                target["src"].setdefault(s, info)
+                target["names"].setdefault(s, rec["names"].get(s, ""))
+                target["teams"].setdefault(s, rec["teams"].get(s, ""))
+            if not target["pos"] and rec["pos"]:
+                target["pos"] = rec["pos"]
+            drop.add(key)
+    for k in drop:
+        records.pop(k, None)
+
+
 def build_master(data: dict) -> list[dict]:
-    """Merge official + every source list into one per-team, per-player master list."""
+    """Merge official + every source list into one master list. Returns per-team
+    groups (grouped leagues) or a single flat group with team-tagged rows."""
+    cfg = LEAGUES[data["league"]]
     records: dict = {}
     for e in (data.get("official") or {}).get("entries", []) or []:
-        _add_player(records, "OFF", e.get("team", ""), e.get("player", ""),
+        _add_player(records, cfg, "OFF", e.get("team", ""), e.get("player", ""),
                     "", e.get("status", ""), e.get("reason", ""))
-    for name, _url, teams in data.get("sources") or []:
-        abbr = SRC_ABBR.get(name, name)
+    for src, teams in (data.get("src_lists") or {}).items():
         for g in teams or []:
             for p in g.get("players", []):
-                _add_player(records, abbr, g.get("team", ""), p.get("player", ""),
+                _add_player(records, cfg, src, g.get("team", ""), p.get("player", ""),
                             p.get("pos", ""), p.get("status", ""), p.get("comment", ""))
-    _merge_initials(records)
-    teams_map: dict = {}
+    if cfg["match_team"]:
+        _merge_initials(records, cfg)
     for rec in records.values():
         rec["display"] = _display_name(rec)
+        rec["team"] = _display_team(rec, cfg)
         rec["status"] = _consolidate_status(rec)
         rec["comment"] = _best_comment(rec)
-        teams_map.setdefault(rec["team"], []).append(rec)
-    out = []
-    for team in sorted(teams_map):
-        players = sorted(teams_map[team], key=lambda r: (-_sev(r["status"]), r["display"].lower()))
-        out.append({"team": team, "players": players})
-    return out
+
+    if cfg["grouped"]:
+        teams_map: dict = {}
+        for rec in records.values():
+            teams_map.setdefault(rec["team"], []).append(rec)
+        out = []
+        for team in sorted(teams_map):
+            players = sorted(teams_map[team], key=lambda r: (-_sev(r["status"]), r["display"].lower()))
+            out.append({"team": team, "players": players})
+        return out
+    flat = sorted(records.values(),
+                  key=lambda r: (r["team"].lower(), -_sev(r["status"]), r["display"].lower()))
+    return [{"team": None, "players": flat}]
 
 
 # ── Rendering ──
@@ -485,33 +547,28 @@ body{font-family:-apple-system,'Segoe UI',Roboto,sans-serif;background:var(--bg)
 .mast h1{font-size:1.7em;font-weight:800}.mast h1 span{color:var(--accent)}
 .mast .sub{color:var(--muted);font-size:.85em;margin-top:6px}
 .mast .menu{display:inline-block;margin-top:9px;color:#cfe0ff;text-decoration:none;font-size:.82em;font-weight:600}
-.wrap{max-width:1000px;margin:0 auto;padding:20px 16px 12px}
-.sec{font-size:1.2em;font-weight:800;margin:20px 0 4px}
+.lgwrap{display:flex;gap:10px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.lgwrap label{color:var(--muted);font-size:.8em;font-weight:700;text-transform:uppercase;letter-spacing:.4px}
+.lgsel{background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:7px;
+       padding:7px 12px;font-size:.95em;font-weight:700;cursor:pointer}
+.lgsel:focus{outline:none;border-color:var(--accent)}
+.wrap{max-width:1000px;margin:0 auto;padding:18px 16px 12px}
+.sec{font-size:1.2em;font-weight:800;margin:16px 0 4px}
 .sec small{font-weight:500;color:var(--muted);font-size:.66em}
-.game{margin:14px 0 6px;color:var(--accent);font-weight:700;font-size:.92em;letter-spacing:.5px}
 .card{background:var(--card);border:1px solid var(--border);border-radius:9px;margin:9px 0;overflow:hidden}
 .card .team{background:rgba(255,255,255,.04);padding:8px 14px;font-weight:700;font-size:.92em;border-bottom:1px solid var(--border)}
 .row{display:flex;gap:10px;align-items:baseline;padding:7px 14px;border-bottom:1px solid rgba(255,255,255,.04);flex-wrap:wrap}
 .row:last-child{border-bottom:none}.row .nm{font-weight:600;min-width:150px}
+.row .tm{color:var(--muted);font-size:.82em;min-width:140px;font-weight:600}
 .row .pos{color:var(--muted);font-size:.78em;min-width:24px}
 .badge{font-size:.7em;font-weight:800;padding:2px 8px;border-radius:11px;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
 .b-out{background:rgba(224,70,62,.18);color:#ff7b73}
 .b-doubtful{background:rgba(240,104,46,.18);color:#ff9b66}
-.b-questionable,.b-game-time-decision,.b-gtd{background:rgba(232,162,60,.18);color:#ffcd76}
+.b-questionable{background:rgba(232,162,60,.18);color:#ffcd76}
 .b-probable,.b-available{background:rgba(70,180,110,.18);color:#74d39a}
-.b-day-to-day{background:rgba(232,162,60,.16);color:#ffcd76}
 .b-default{background:rgba(138,152,168,.18);color:#b7c2cf}
 .rsn{color:var(--muted);font-size:.85em;flex:1;min-width:160px}
 .empty{color:var(--muted);font-style:italic;padding:14px 0}
-details.src{margin:10px 0;border:1px solid var(--border);border-radius:9px;background:rgba(255,255,255,.015)}
-details.src>summary{cursor:pointer;padding:11px 14px;font-weight:700;list-style:none}
-details.src>summary::-webkit-details-marker{display:none}
-details.src>summary:before{content:'\\25B8  ';color:var(--accent)}
-details.src[open]>summary:before{content:'\\25BE  '}
-details.src>summary small{font-weight:500;color:var(--muted);font-size:.8em}
-details.src .inner{padding:0 12px 10px}
-.disc{color:var(--muted);font-size:.78em;margin:22px 0 6px;padding-top:14px;border-top:2px solid var(--accent);text-align:center}
-.disc a{color:#5aa0e0;text-decoration:none}
 .legend{display:flex;gap:8px 16px;flex-wrap:wrap;align-items:center;background:var(--card);border:1px solid var(--border);border-radius:9px;padding:10px 14px;margin:8px 0 2px;font-size:.8em;color:var(--muted)}
 .legend .lk{color:var(--text);font-weight:700}
 .legend .note{flex-basis:100%;color:var(--muted);font-size:.92em}
@@ -521,6 +578,8 @@ details.src .inner{padding:0 12px 10px}
 .varies{font-size:.72em;color:#ffcd76;cursor:default;white-space:nowrap}
 .cnt{color:var(--muted);font-weight:500;font-size:.72em}
 .team .cnt{font-size:.82em}
+.disc{color:var(--muted);font-size:.78em;margin:22px 0 6px;padding-top:14px;border-top:2px solid var(--accent);text-align:center}
+.disc a{color:#5aa0e0;text-decoration:none}
 """
 
 
@@ -530,9 +589,7 @@ def _esc(s) -> str:
 
 def _badge(status: str) -> str:
     s = (status or "").lower()
-    if not s:
-        cls = "b-default"
-    elif "doubt" in s:
+    if "doubt" in s:
         cls = "b-doubtful"
     elif "out" in s or "season" in s:
         cls = "b-out"
@@ -566,24 +623,28 @@ def _varies(rec: dict) -> str:
     return f'<span class="varies" title="{_esc(detail)}">&#9888; varies</span>'
 
 
-def _master_row(rec: dict) -> str:
+def _master_row(rec: dict, show_team: bool) -> str:
+    tm = f'<span class="tm">{_esc(rec.get("team",""))}</span>' if show_team else ""
     pos = f'<span class="pos">{_esc(rec.get("pos",""))}</span>' if rec.get("pos") else ""
-    return (f'<div class="row"><span class="nm">{_esc(rec["display"])}</span>{pos}'
+    return (f'<div class="row">{tm}<span class="nm">{_esc(rec["display"])}</span>{pos}'
             f'{_badge(rec["status"])}{_varies(rec)}{_src_chips(rec)}'
             f'<span class="rsn">{_esc(rec.get("comment","")) or "&mdash;"}</span></div>')
 
 
-def render_page(data: dict) -> str:
+def render_page(data: dict, league: str) -> str:
+    cfg = LEAGUES[league]
     gen = data["generated_at"]
     gen_str = gen.strftime("%b %d, %#I:%M %p ET" if sys.platform == "win32"
                            else "%b %d, %-I:%M %p ET")
     off = data.get("official") or {}
-    master = build_master(data)
-    total = sum(len(t["players"]) for t in master)
+    groups = build_master(data)
+    total = sum(len(g["players"]) for g in groups)
 
+    src_keys = (["OFF"] if cfg["official"] else []) + \
+               [k for k in ("ESPN", "AN", "RW", "COV") if k in (data.get("src_lists") or {})]
     legend_items = "".join(
         f'<span><span class="srcchip {"s-off" if k == "OFF" else ""}">{k}</span> '
-        f'{_esc(SOURCE_NAMES[k].split(" (")[0])}</span>' for k in SOURCE_ORDER)
+        f'{_esc(SOURCE_NAMES[k].split(" (")[0])}</span>' for k in src_keys)
     legend = (f'<div class="legend"><span class="lk">Source key:</span>{legend_items}'
               '<span class="note">Each player appears once; chips show which sources list them '
               '(hover for that source&rsquo;s status). Badge = official status if on the game-day '
@@ -591,86 +652,105 @@ def render_page(data: dict) -> str:
               '= sources disagree (hover for the breakdown).</span></div>')
 
     ctx = f' &middot; official report: {_esc(off.get("date_label",""))}' if off.get("date_label") else ""
-    body = [legend, f'<div class="sec">Master Injury List '
-            f'<small class="cnt">{total} players &middot; {len(master)} teams{ctx}</small></div>']
+    body = [legend, f'<div class="sec">{_esc(cfg["label"])} Master Injury List '
+            f'<small class="cnt">{total} players{ctx}</small></div>']
 
-    if master:
-        for g in master:
-            body.append(f'<div class="card"><div class="team">{_esc(g["team"])} '
-                        f'<span class="cnt">{len(g["players"])}</span></div>')
-            body += [_master_row(r) for r in g["players"]]
+    if total:
+        if cfg["grouped"]:
+            for g in groups:
+                body.append(f'<div class="card"><div class="team">{_esc(g["team"])} '
+                            f'<span class="cnt">{len(g["players"])}</span></div>')
+                body += [_master_row(r, show_team=False) for r in g["players"]]
+                body.append("</div>")
+        else:
+            body.append('<div class="card">')
+            body += [_master_row(r, show_team=True) for r in groups[0]["players"]]
             body.append("</div>")
     else:
         body.append('<div class="empty">No injuries available right now (sources temporarily unavailable).</div>')
 
+    options = "".join(
+        f'<option value="{k}"{" selected" if k == league else ""}>{_esc(v["label"])}</option>'
+        for k, v in LEAGUES.items())
+
     return f"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<meta name=description content="WNBA injury report — one master list merging official game-day designations with ESPN, Action Network, Rotowire and Covers, showing which sources list each player.">
+<meta name=description content="Basketball injury reports — one master list per league (WNBA, NBA, NCAA Men) merging ESPN, Action Network, Rotowire, Covers and the official WNBA report, showing which sources list each player.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <meta name="theme-color" content="#0f1923">
-<title>WNBA Injury Report</title><style>{CSS}</style></head><body>
-<header class="mast"><h1><span>&#9862;</span> WNBA Injury Report</h1>
-<div class="sub">One master list across 5 sources (WNBA.com official, ESPN, Action Network, Rotowire, Covers) &middot; updated {_esc(gen_str)}</div>
+<title>{_esc(cfg["label"])} Injury Report</title><style>{CSS}</style>
+<style>:root{{--accent:{cfg["accent"]}}}</style></head><body>
+<header class="mast"><h1><span>&#9862;</span> Basketball Injury Report</h1>
+<div class="sub">One master list per league across every free source &middot; updated {_esc(gen_str)}</div>
+<div class="lgwrap"><label for="lg">League</label>
+<select id="lg" class="lgsel" onchange="location.search='league='+this.value">{options}</select></div>
 <a class="menu" href="/">&#8962; Main Menu</a></header>
 <div class="wrap">{''.join(body)}
-<div class="disc">Sources: official <a href="{WNBA_PAGE}" target="_blank" rel="noopener">WNBA.com</a>,
-<a href="{ESPN_PAGE}" target="_blank" rel="noopener">ESPN</a>,
-<a href="{AN_PAGE}" target="_blank" rel="noopener">Action Network</a>,
-<a href="{ROTOWIRE_PAGE}" target="_blank" rel="noopener">Rotowire</a>,
-<a href="{COVERS_PAGE}" target="_blank" rel="noopener">Covers</a> &middot; cached ~10 min &middot; for information only.</div>
+<div class="disc">Free sources: ESPN, Action Network, Rotowire, Covers
+{"+ official WNBA.com" if cfg["official"] else ""} &middot; cached ~10 min &middot; for information only.</div>
 </div></body></html>"""
 
 
 @app.route("/")
 def index():
-    return Response(render_page(get_data()), mimetype="text/html")
+    league = request.args.get("league", DEFAULT_LEAGUE)
+    if league not in LEAGUES:
+        league = DEFAULT_LEAGUE
+    return Response(render_page(get_data(league), league), mimetype="text/html")
 
 
 @app.route("/api/injuries")
 def api_injuries():
-    d = get_data()
-    master = build_master(d)
+    league = request.args.get("league", DEFAULT_LEAGUE)
+    if league not in LEAGUES:
+        league = DEFAULT_LEAGUE
+    d = get_data(league)
+    groups = build_master(d)
     return Response(json.dumps({
+        "league": league,
         "generated_at": d["generated_at"].isoformat(),
-        "teams": [{"team": g["team"], "players": [{
-            "player": r["display"], "pos": r.get("pos", ""), "status": r["status"],
-            "comment": r.get("comment", ""),
+        "players": [{
+            "player": r["display"], "team": r.get("team", ""), "pos": r.get("pos", ""),
+            "status": r["status"], "comment": r.get("comment", ""),
             "sources": {s: r["src"][s]["status"] for s in SOURCE_ORDER if s in r["src"]},
-        } for r in g["players"]]} for g in master],
+        } for g in groups for r in g["players"]],
     }, default=str), mimetype="application/json")
 
 
 # ── CLI ──
 
-def _print_console():
+def _print_console(league: str):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:  # noqa: BLE001
         pass
-    d = gather()
-    master = build_master(d)
-    total = sum(len(t["players"]) for t in master)
-    print(f"\nWNBA MASTER INJURY LIST - {total} players across {len(master)} teams")
+    d = gather(league)
+    groups = build_master(d)
+    total = sum(len(g["players"]) for g in groups)
+    print(f"\n{LEAGUES[league]['label'].upper()} MASTER INJURY LIST - {total} players")
     print("Source key: " + " · ".join(f"{s}={SOURCE_NAMES[s].split(' (')[0]}" for s in SOURCE_ORDER))
-    print("=" * 78)
-    for g in master:
-        print(f"\n{g['team']}")
+    print("=" * 80)
+    for g in groups:
+        if g["team"]:
+            print(f"\n{g['team']}")
         for r in g["players"]:
             srcs = ",".join(s for s in SOURCE_ORDER if s in r["src"])
-            print(f"   {r['display']:24} {r['status']:13} [{srcs:16}] {r.get('comment','')[:32]}")
-    if not master:
+            tm = f"{r['team'][:18]:18} " if g["team"] is None else "   "
+            print(f"{tm}{r['display']:24} {r['status']:13} [{srcs:16}] {r.get('comment','')[:28]}")
+    if not total:
         print("  (no injuries available)")
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="WNBA injury report (official + ESPN + Action Network + Covers)")
+    ap = argparse.ArgumentParser(description="Basketball injury reports (WNBA / NBA / NCAA Men)")
     ap.add_argument("--once", action="store_true", help="print to console and exit")
+    ap.add_argument("--league", default=DEFAULT_LEAGUE, choices=list(LEAGUES))
     ap.add_argument("--port", type=int, default=5010)
     args = ap.parse_args()
     if args.once:
-        _print_console()
+        _print_console(args.league)
         return 0
-    print(f"WNBA injuries on http://localhost:{args.port}")
+    print(f"Basketball injuries on http://localhost:{args.port}")
     app.run(port=args.port, debug=False)
     return 0
 
