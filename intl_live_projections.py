@@ -1186,6 +1186,35 @@ _foul_cache_lock = threading.Lock()
 _foul_cache: dict[str, tuple[dict, float]] = {}
 FOUL_CACHE_TTL = 25
 
+# Shared ESPN summary cache so fouls + box stats reuse one fetch per game.
+_summary_cache_lock = threading.Lock()
+_summary_cache: dict[str, tuple] = {}
+SUMMARY_CACHE_TTL = 20
+
+# Live box-score pace ("Actual" columns): Poss = FGA - ORB + TOV + 0.44*FTA per
+# team, averaged, normalized to a league's regulation minutes. ESPN feeds only
+# (G League / NBL) — other sources (api-sports, Euroleague, BBL) carry no box
+# stats, so the Actual columns simply don't render for them.
+FT_POSS_COEF = 0.44
+LIVE_PACE_MIN_ELAPSED = 3.0     # min elapsed game-minutes before extrapolating
+
+
+def _get_summary(slug: str, game_id: str):
+    """Fetch (and briefly cache) an ESPN summary payload, shared by fouls + box."""
+    now = time.monotonic()
+    with _summary_cache_lock:
+        hit = _summary_cache.get(game_id)
+        if hit and now - hit[1] < SUMMARY_CACHE_TTL:
+            return hit[0]
+    try:
+        raw = _fetch_json(f"{ESPN_BASE}/{slug}/summary?event={game_id}", timeout=8)
+    except Exception:
+        raw = None
+    with _summary_cache_lock:
+        _summary_cache[game_id] = (raw, time.monotonic())
+    return raw
+
+
 EMPTY_FOULS = {
     "away_total_fouls": 0, "away_current_fouls": 0,
     "away_fouls_to_give": 0, "away_bonus": "NONE",
@@ -1203,10 +1232,8 @@ def fetch_game_fouls(slug: str, game_id: str) -> dict:
             if now - ts < FOUL_CACHE_TTL:
                 return data
 
-    try:
-        url = f"{ESPN_BASE}/{slug}/summary?event={game_id}"
-        raw = _fetch_json(url, timeout=8)
-    except Exception:
+    raw = _get_summary(slug, game_id)
+    if raw is None:
         return dict(EMPTY_FOULS)
 
     try:
@@ -1297,6 +1324,152 @@ def fetch_fouls_for_live_games(games: list[dict]) -> dict[str, dict]:
             except Exception:
                 results[gid] = dict(EMPTY_FOULS)
     return results
+
+
+# ── Live box-score pace ("Actual" columns, ESPN feeds only) ──
+
+def _extract_box_stats(raw: dict) -> dict:
+    """Pull per-team FGA, ORB, TOV, FTA from an ESPN summary boxscore.
+
+    Returns {away_fga, away_orb, away_tov, away_fta, home_...} or {} unless all
+    four stats are present for both teams.
+    """
+    teams = raw.get("boxscore", {}).get("teams", [])
+    if len(teams) != 2:
+        return {}
+    comps = raw.get("header", {}).get("competitions", [{}])[0].get("competitors", [])
+    side_by_id = {c.get("id", ""): c.get("homeAway", "") for c in comps}
+
+    def attempts(val: str):
+        try:
+            return int(val.split("-")[1])
+        except (IndexError, ValueError, AttributeError):
+            return None
+
+    def whole(val: str):
+        try:
+            return int(float(val))
+        except (ValueError, TypeError):
+            return None
+
+    out: dict = {}
+    for t in teams:
+        side = t.get("homeAway", "") or side_by_id.get(t.get("team", {}).get("id", ""), "")
+        if side not in ("away", "home"):
+            continue
+        stats = {s.get("name", ""): s.get("displayValue", "")
+                 for s in t.get("statistics", [])}
+        fga = attempts(stats.get("fieldGoalsMade-fieldGoalsAttempted", ""))
+        fta = attempts(stats.get("freeThrowsMade-freeThrowsAttempted", ""))
+        orb = whole(stats.get("offensiveRebounds", ""))
+        tov = whole(stats.get("totalTurnovers", "") or stats.get("turnovers", ""))
+        if None in (fga, fta, orb, tov):
+            continue
+        out[f"{side}_fga"] = fga
+        out[f"{side}_orb"] = orb
+        out[f"{side}_tov"] = tov
+        out[f"{side}_fta"] = fta
+    return out if len(out) == 8 else {}
+
+
+def fetch_game_box(slug: str, game_id: str) -> dict:
+    """Per-team box stats for an ESPN game (shares the summary fetch with fouls)."""
+    raw = _get_summary(slug, game_id)
+    if not raw:
+        return {}
+    try:
+        return _extract_box_stats(raw)
+    except Exception:
+        return {}
+
+
+def fetch_box_for_live_games(games: list[dict]) -> dict[str, dict]:
+    """Box stats for live ESPN-fed games (those configured in LEAGUES)."""
+    live = [g for g in games if g["state"] == "in" and g["league_slug"] in LEAGUES]
+    if not live:
+        return {}
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=min(len(live), 8)) as pool:
+        futures = {pool.submit(fetch_game_box, g["league_slug"], g["game_id"]): g["game_id"]
+                   for g in live}
+        for fut in futures:
+            gid = futures[fut]
+            try:
+                results[gid] = fut.result(timeout=10)
+            except Exception:
+                results[gid] = {}
+    return results
+
+
+# Default (all-None) so the template's `is not none` checks are always safe.
+EMPTY_PACE = {
+    "live_box_poss": None, "live_pace": None,
+    "pace_away_final": None, "pace_home_final": None,
+    "pace_proj_total": None, "pace_proj_margin": None,
+    "pace_away_1h_final": None, "pace_home_1h_final": None,
+    "pace_1h_total": None, "pace_1h_margin": None,
+}
+
+
+def compute_live_pace_stats(g: dict) -> dict:
+    """Estimate current pace from the live box score and extrapolate.
+
+    Poss = FGA - ORB + TOV + 0.44*FTA per team, averaged, normalized to the
+    league's regulation minutes. If that pace and each team's current PPP hold,
+    project the final score, total, and margin — plus the 1H line while the
+    first half is still in progress. Needs box stats, so it only produces values
+    for ESPN-fed games; returns all-None otherwise.
+    """
+    out = dict(EMPTY_PACE)
+    if g.get("state") != "in":
+        return out
+    keys = ("away_fga", "away_orb", "away_tov", "away_fta",
+            "home_fga", "home_orb", "home_tov", "home_fta")
+    if any(g.get(k) is None for k in keys):
+        return out
+    elapsed = g.get("time_elapsed") or 0.0
+    if elapsed < LIVE_PACE_MIN_ELAPSED:
+        return out
+
+    reg_min = _get_league_config(g["league_slug"]).get("reg_min", 40.0)
+
+    away_poss = g["away_fga"] - g["away_orb"] + g["away_tov"] + FT_POSS_COEF * g["away_fta"]
+    home_poss = g["home_fga"] - g["home_orb"] + g["home_tov"] + FT_POSS_COEF * g["home_fta"]
+    box_poss = (away_poss + home_poss) / 2.0
+    if box_poss <= 0:
+        return out
+
+    live_pace = reg_min * box_poss / elapsed
+    remaining = g.get("time_remaining") or 0.0
+    rem_poss = live_pace * (remaining / reg_min)
+
+    away_ppp = g["away_score"] / box_poss
+    home_ppp = g["home_score"] / box_poss
+    away_final = g["away_score"] + rem_poss * away_ppp
+    home_final = g["home_score"] + rem_poss * home_ppp
+
+    out.update({
+        "live_box_poss": round(box_poss, 1),
+        "live_pace": round(live_pace, 1),
+        "pace_away_final": round(away_final, 1),
+        "pace_home_final": round(home_final, 1),
+        "pace_proj_total": round(away_final + home_final, 1),
+        "pace_proj_margin": round(home_final - away_final, 1),   # home - away
+    })
+
+    # 1H extrapolation only while the first half is still in progress.
+    half_min = reg_min / 2.0
+    if g.get("period", 0) <= 2 and elapsed < half_min:
+        rem_1h_poss = live_pace * ((half_min - elapsed) / reg_min)
+        away_1h = g["away_score"] + rem_1h_poss * away_ppp
+        home_1h = g["home_score"] + rem_1h_poss * home_ppp
+        out.update({
+            "pace_away_1h_final": round(away_1h, 1),
+            "pace_home_1h_final": round(home_1h, 1),
+            "pace_1h_total": round(away_1h + home_1h, 1),
+            "pace_1h_margin": round(home_1h - away_1h, 1),
+        })
+    return out
 
 
 # ── Projection engine ──
@@ -1616,8 +1789,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#0f1923">
 <title>International Basketball Live Projections</title>
 <style>
   :root {
@@ -1932,13 +2103,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <header>
   <h1><span>&#127760;</span> International Basketball Live Projections</h1>
   <div class="header-meta">
-    <a href="/" style="font-weight:600">&larr; Main Menu</a>
     <span>{{ date_display }}</span>
     <span>{{ total_games }} games across {{ league_count }} leagues</span>
     {% for lname, lcount in league_summary %}
       <span>{{ lname }}: {{ lcount }}</span>
     {% endfor %}
-    <a href="refresh">Refresh Ratings</a>
+    <a href="/refresh">Refresh Ratings</a>
     <span id="countdown-wrap">Next update: <span id="countdown">30</span>s</span>
   </div>
 </header>
@@ -2042,7 +2212,7 @@ function toggleSection(id) {
 
 async function refreshGames() {
   try {
-    const resp = await fetch('api/games');
+    const resp = await fetch('/api/games');
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
     document.getElementById('live-container').innerHTML = data.live_html;
@@ -2125,6 +2295,38 @@ LIVE_PARTIAL = r"""{% if games %}
         <span class="val">{{ g.proj_total }}</span>
       </div>
     </div>
+    {% if g.live_pace is not none %}
+    <div class="proj-row" style="border-top:1px dashed rgba(255,255,255,.12);margin-top:4px;padding-top:8px">
+      <div class="proj-stat">
+        <label>Actual Pace</label>
+        <span class="val">{{ g.live_pace }}</span>
+      </div>
+      {% if g.pace_away_1h_final is not none %}
+      <div class="proj-stat">
+        <label>Actual 1H</label>
+        <span class="val">{{ g.pace_away_1h_final }} - {{ g.pace_home_1h_final }}</span>
+      </div>
+      <div class="proj-stat">
+        <label>Actual 1H Total</label>
+        <span class="val">{{ g.pace_1h_total }}</span>
+      </div>
+      {% endif %}
+      <div class="proj-stat">
+        <label>Actual Final</label>
+        <span class="val">{{ g.pace_away_final }} - {{ g.pace_home_final }}</span>
+      </div>
+      <div class="proj-stat">
+        <label>Actual Margin</label>
+        <span class="val {{ 'spread-home' if g.pace_proj_margin > 0 else 'spread-away' }}">
+          {{ "Home" if g.pace_proj_margin > 0 else "Away" }} {{ "%.1f"|format(g.pace_proj_margin|abs) }}
+        </span>
+      </div>
+      <div class="proj-stat">
+        <label>Actual Total</label>
+        <span class="val">{{ g.pace_proj_total }}</span>
+      </div>
+    </div>
+    {% endif %}
     {% if g.has_fouls %}
     <div class="fouls-row">
       <div class="foul-team">
@@ -2315,8 +2517,10 @@ def fetch_and_project() -> tuple[list[dict], list[dict], list[dict], str, str | 
     games, error = _fetch_all_scoreboards_cached()
     projected = [project_game(g) for g in games]
 
-    # Fetch fouls for live games that support play-by-play
+    # Fetch fouls (play-by-play leagues) + box stats (all ESPN feeds) for live
+    # games; box stats drive the "Actual" live-pace columns.
     foul_map = fetch_fouls_for_live_games(projected)
+    box_map = fetch_box_for_live_games(projected)
     for g in projected:
         fouls = foul_map.get(g["game_id"], None)
         has_pbp = LEAGUES.get(g["league_slug"], {}).get("has_pbp", False)
@@ -2326,6 +2530,9 @@ def fetch_and_project() -> tuple[list[dict], list[dict], list[dict], str, str | 
         else:
             g.update(EMPTY_FOULS)
             g["has_fouls"] = False
+        # Actual box-score pace (ESPN feeds only; all-None otherwise)
+        g.update(box_map.get(g["game_id"]) or {})
+        g.update(compute_live_pace_stats(g))
 
     _, _base_dt = get_date_str()
     _cutoff = _base_dt.timestamp() + WINDOW_HOURS * 3600
