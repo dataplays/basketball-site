@@ -639,6 +639,7 @@ def fetch_euroleague_api_games(date_str: str) -> list[dict]:
                 "league_emoji": cfg["emoji"],
                 "league_accent": cfg["accent"],
                 "game_id": f"el_{g.get('gameCode', 0)}",
+                "el_game_code": g.get("gameCode"),
                 "state": state,
                 "clock_seconds": 0,
                 "display_clock": "0:00",
@@ -1383,15 +1384,112 @@ def fetch_game_box(slug: str, game_id: str) -> dict:
         return {}
 
 
-def fetch_box_for_live_games(games: list[dict]) -> dict[str, dict]:
-    """Box stats for live ESPN-fed games (those configured in LEAGUES)."""
-    live = [g for g in games if g["state"] == "in" and g["league_slug"] in LEAGUES]
-    if not live:
+# EuroLeague / EuroCup classic boxscore feed (separate host, carries team totals).
+EUROLEAGUE_BOX_URL = "https://live.euroleague.net/api/Boxscore"
+_el_box_cache_lock = threading.Lock()
+_el_box_cache: dict[str, tuple] = {}
+EL_BOX_CACHE_TTL = 20
+
+
+def _get_euroleague_boxscore(game_code, season_code: str):
+    """Fetch (and briefly cache) a EuroLeague/EuroCup classic boxscore payload."""
+    key = f"{season_code}_{game_code}"
+    now = time.monotonic()
+    with _el_box_cache_lock:
+        hit = _el_box_cache.get(key)
+        if hit and now - hit[1] < EL_BOX_CACHE_TTL:
+            return hit[0]
+    raw = None
+    try:
+        resp = _requests.get(
+            EUROLEAGUE_BOX_URL,
+            params={"gamecode": game_code, "seasoncode": season_code},
+            headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        resp.raise_for_status()
+        text = resp.text.strip()
+        try:
+            raw = resp.json()
+        except Exception:
+            raw = json.loads(text.split("\n")[0])    # tolerate trailing data
+    except Exception:
+        raw = None
+    with _el_box_cache_lock:
+        _el_box_cache[key] = (raw, time.monotonic())
+    return raw
+
+
+def _extract_euroleague_box(raw: dict, home_name: str, away_name: str) -> dict:
+    """Pull per-team FGA/ORB/TOV/FTA from a EuroLeague boxscore (`Stats[].totr`).
+
+    Stats[0] is the home (local) team, Stats[1] the away (road) team; we still
+    match on team name when possible and fall back to that positional order.
+    """
+    stats = raw.get("Stats") or []
+    if len(stats) != 2:
         return {}
+
+    def nm(s):
+        return (s.get("Team") or "").strip().upper()
+
+    hn, an = (home_name or "").strip().upper(), (away_name or "").strip().upper()
+    home_stat = next((s for s in stats if nm(s) == hn), None)
+    away_stat = next((s for s in stats if nm(s) == an), None)
+    if home_stat is None or away_stat is None:
+        home_stat, away_stat = stats[0], stats[1]      # local-first convention
+
+    out: dict = {}
+    for side, s in (("home", home_stat), ("away", away_stat)):
+        tot = s.get("totr") or {}
+        try:
+            fga = int(tot["FieldGoalsAttempted2"]) + int(tot["FieldGoalsAttempted3"])
+            fta = int(tot["FreeThrowsAttempted"])
+            orb = int(tot["OffensiveRebounds"])
+            tov = int(tot["Turnovers"])
+        except (KeyError, TypeError, ValueError):
+            return {}
+        out[f"{side}_fga"] = fga
+        out[f"{side}_orb"] = orb
+        out[f"{side}_tov"] = tov
+        out[f"{side}_fta"] = fta
+    return out if len(out) == 8 else {}
+
+
+def fetch_euroleague_box(game: dict) -> dict:
+    """Box stats for a live EuroLeague/EuroCup game via its classic boxscore feed."""
+    code = game.get("el_game_code")
+    season = EUROLEAGUE_API_LEAGUES.get(game["league_slug"], {}).get("season")
+    if code is None or not season:
+        return {}
+    raw = _get_euroleague_boxscore(code, season)
+    if not raw:
+        return {}
+    try:
+        return _extract_euroleague_box(raw, game.get("home_name", ""), game.get("away_name", ""))
+    except Exception:
+        return {}
+
+
+def fetch_box_for_live_games(games: list[dict]) -> dict[str, dict]:
+    """Box stats for live games that expose them: ESPN feeds (LEAGUES) via the
+    summary boxscore, and EuroLeague/EuroCup via the classic boxscore feed."""
+    tasks = []   # (game, kind)
+    for g in games:
+        if g["state"] != "in":
+            continue
+        if g["league_slug"] in LEAGUES:
+            tasks.append((g, "espn"))
+        elif g["league_slug"] in EUROLEAGUE_API_LEAGUES:
+            tasks.append((g, "euro"))
+    if not tasks:
+        return {}
+
+    def _one(g, kind):
+        return (fetch_game_box(g["league_slug"], g["game_id"]) if kind == "espn"
+                else fetch_euroleague_box(g))
+
     results: dict[str, dict] = {}
-    with ThreadPoolExecutor(max_workers=min(len(live), 8)) as pool:
-        futures = {pool.submit(fetch_game_box, g["league_slug"], g["game_id"]): g["game_id"]
-                   for g in live}
+    with ThreadPoolExecutor(max_workers=min(len(tasks), 8)) as pool:
+        futures = {pool.submit(_one, g, kind): g["game_id"] for g, kind in tasks}
         for fut in futures:
             gid = futures[fut]
             try:
