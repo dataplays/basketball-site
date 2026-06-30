@@ -31,24 +31,27 @@ import prophetx_lines as px
 KEY = os.environ.get("ODDSPAPI_KEY", "")
 CACHE_TTL = 35.0           # seconds to reuse a per-book slate (just above the 30s
                            # client poll so refreshes reuse cache; matters most for
-                           # the Compare view, which fans out to 6 books)
+                           # the Compare view, which fans out to 7 books)
 ACCENT = "#15c39a"
 
 # Books we expose. Exchanges (prophetx/kalshi) carry real `limit` size, so they
 # get liquidity bars + the kappa-shaded line. Traditional sportsbooks post odds
 # only (no size) -> we show their odds + the no-vig fair line, no bar/shade.
 EXCHANGES = {"prophetx", "kalshi"}
-SPORTSBOOKS = {"caesars", "betrivers", "thescore", "fanduel"}
+SPORTSBOOKS = {"pinnacle", "caesars", "betrivers", "thescore", "fanduel"}
 BOOKS = EXCHANGES | SPORTSBOOKS
 # Book selector buttons (label -> view); "compare" is a special PX-vs-Kalshi mode.
+# Pinnacle is the sharpest book, so it sits right after the exchanges.
 BOOK_CHIPS = [("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
+              ("Pinnacle", "pinnacle"),
               ("Caesars", "caesars"), ("BetRivers", "betrivers"),
               ("theScore", "thescore"), ("FanDuel", "fanduel"),
               ("Compare", "compare"), ("Recap", "recap")]
 # Books shown side-by-side in the Compare (line-shopping) grid, column order.
-COMPARE_BOOKS = ["prophetx", "kalshi", "caesars", "betrivers", "thescore", "fanduel"]
-COMPARE_LABELS = {"prophetx": "ProphetX", "kalshi": "Kalshi", "caesars": "Caesars",
-                  "betrivers": "BetRivers", "thescore": "theScore", "fanduel": "FanDuel"}
+COMPARE_BOOKS = ["prophetx", "kalshi", "pinnacle", "caesars", "betrivers", "thescore", "fanduel"]
+COMPARE_LABELS = {"prophetx": "ProphetX", "kalshi": "Kalshi", "pinnacle": "Pinnacle",
+                  "caesars": "Caesars", "betrivers": "BetRivers", "thescore": "theScore",
+                  "fanduel": "FanDuel"}
 
 # Tournament quick-filters shown in the UI (label -> OddsPapi tournamentId, 0=all).
 TOURNAMENTS = [("All", 0), ("WNBA", 486), ("NBA", 132), ("Summer League", 15822)]
