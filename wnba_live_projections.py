@@ -1187,16 +1187,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
       <div class="proj-row">
         <div class="proj-stat">
-          <label>{{ "1H Final" if g.h1_is_actual else "Expected 1H" }}</label>
-          <span class="val">{{ g.away_1h_proj }} - {{ g.home_1h_proj }}</span>
+          <label>{{ "1H Margin" if g.h1_is_actual else "Exp 1H Margin" }}</label>
+          <span class="val {{ 'spread-home' if g.proj_1h_spread > 0 else 'spread-away' }}">
+            {{ "Home" if g.proj_1h_spread > 0 else "Away" }} {{ "%.1f"|format(g.proj_1h_spread|abs) }}
+          </span>
         </div>
         <div class="proj-stat">
           <label>{{ "1H Total" if g.h1_is_actual else "Expected 1H Total" }}</label>
           <span class="val">{{ g.proj_1h_total }}</span>
-        </div>
-        <div class="proj-stat">
-          <label>Expected Final</label>
-          <span class="val">{{ g.away_final }} - {{ g.home_final }}</span>
         </div>
         <div class="proj-stat">
           <label>Expected Margin</label>
@@ -1207,10 +1205,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         <div class="proj-stat">
           <label>Expected Total</label>
           <span class="val">{{ g.proj_total }}</span>
-        </div>
-        <div class="proj-stat box-pace">
-          <label>Actual Pace</label>
-          <span class="val">{% if g.live_pace is not none %}{{ g.live_pace }}{% else %}&mdash;{% endif %}</span>
         </div>
         {% if g.pace_1h_total is not none %}
         <div class="proj-stat box-pace">
@@ -1408,16 +1402,14 @@ LIVE_PARTIAL = r"""{% if games %}
     </div>
     <div class="proj-row">
       <div class="proj-stat">
-        <label>{{ "1H Final" if g.h1_is_actual else "Expected 1H" }}</label>
-        <span class="val">{{ g.away_1h_proj }} - {{ g.home_1h_proj }}</span>
+        <label>{{ "1H Margin" if g.h1_is_actual else "Exp 1H Margin" }}</label>
+        <span class="val {{ 'spread-home' if g.proj_1h_spread > 0 else 'spread-away' }}">
+          {{ "Home" if g.proj_1h_spread > 0 else "Away" }} {{ "%.1f"|format(g.proj_1h_spread|abs) }}
+        </span>
       </div>
       <div class="proj-stat">
         <label>{{ "1H Total" if g.h1_is_actual else "Expected 1H Total" }}</label>
         <span class="val">{{ g.proj_1h_total }}</span>
-      </div>
-      <div class="proj-stat">
-        <label>Expected Final</label>
-        <span class="val">{{ g.away_final }} - {{ g.home_final }}</span>
       </div>
       <div class="proj-stat">
         <label>Expected Margin</label>
@@ -1428,10 +1420,6 @@ LIVE_PARTIAL = r"""{% if games %}
       <div class="proj-stat">
         <label>Expected Total</label>
         <span class="val">{{ g.proj_total }}</span>
-      </div>
-      <div class="proj-stat box-pace">
-        <label>Actual Pace</label>
-        <span class="val">{% if g.live_pace is not none %}{{ g.live_pace }}{% else %}&mdash;{% endif %}</span>
       </div>
       {% if g.pace_1h_total is not none %}
       <div class="proj-stat box-pace">
