@@ -224,7 +224,7 @@ LANDING_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <header><h1><span>&#9679;</span> Basketball Dashboards</h1>
 <div class=sub>Live projections &amp; tools &middot; updates automatically</div></header>
 <div class=container>
-  <div class=section>Dashboards &amp; Calculators</div>
+  <div class=section>Live Projection Sets</div>
   {% if dashboards %}
   <div class=grid>
     {% for prefix,label,color in dashboards %}
