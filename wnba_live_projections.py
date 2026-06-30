@@ -26,7 +26,6 @@ Usage:
 """
 
 import argparse
-import os
 import csv
 import html as htmlmod
 import json
@@ -44,7 +43,7 @@ from flask import Flask, jsonify, redirect, render_template_string, url_for
 
 # ── Paths & constants ──
 
-RATINGS_CSV = (Path(os.environ.get("BBALL_DATA_DIR", str(Path(__file__).resolve().parent / "data"))) / "wnba_ratings_2026.csv")
+RATINGS_CSV = Path(r"C:\Users\User\Documents\wnba_ratings_2026.csv")
 ET = ZoneInfo("America/New_York")
 
 ESPN_API = (
@@ -806,8 +805,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#0f1923">
 <title>WNBA Live Projections</title>
 <style>
   :root {
@@ -1146,13 +1143,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <header>
   <h1><span>&#9794;</span> WNBA Live Projections</h1>
   <div class="header-meta">
-    <a href="/" style="font-weight:600">&larr; Main Menu</a>
     <span>{{ date_display }}</span>
     <span>{{ total_games }} games</span>
     <span>Ratings: {{ ratings_source }}</span>
     <span class="hca">HCA: &plusmn;{{ hca_half }}</span>
     <span style="color:var(--amber)" title="Regression to the Mean: at {{ blowout_threshold }}+ pt leads, projections regress toward league avg">RTM: {{ blowout_threshold }}+ pts</span>
-    <a href="refresh">Refresh Ratings</a>
+    <a href="/refresh">Refresh Ratings</a>
     <span id="countdown-wrap">Next update: <span id="countdown">30</span>s</span>
   </div>
 </header>
@@ -1190,10 +1186,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
         </div>
       </div>
       <div class="proj-row">
-        <div class="proj-stat">
-          <label>Exp Possessions</label>
-          <span class="val">{{ g.poss_so_far }} / {{ g.total_expected_poss }}</span>
-        </div>
         <div class="proj-stat">
           <label>{{ "1H Final" if g.h1_is_actual else "Expected 1H" }}</label>
           <span class="val">{{ g.away_1h_proj }} - {{ g.home_1h_proj }}</span>
@@ -1359,7 +1351,7 @@ function toggleSection(id) {
 
 async function refreshGames() {
   try {
-    const resp = await fetch('api/games');
+    const resp = await fetch('/api/games');
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
     document.getElementById('live-container').innerHTML = data.live_html;
@@ -1415,10 +1407,6 @@ LIVE_PARTIAL = r"""{% if games %}
       </div>
     </div>
     <div class="proj-row">
-      <div class="proj-stat">
-        <label>Exp Possessions</label>
-        <span class="val">{{ g.poss_so_far }} / {{ g.total_expected_poss }}</span>
-      </div>
       <div class="proj-stat">
         <label>{{ "1H Final" if g.h1_is_actual else "Expected 1H" }}</label>
         <span class="val">{{ g.away_1h_proj }} - {{ g.home_1h_proj }}</span>
