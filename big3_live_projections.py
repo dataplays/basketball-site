@@ -66,6 +66,17 @@ WINDOW_HOURS = 48          # "upcoming" = any game tipping within this rolling w
 # even matchup yields a realistic ~50-43 final and ~90-ish total).
 LEAGUE_PPP = 1.16
 
+# Empirical margin calibration. An independent-possession race overstates the
+# final margin (~10-11) vs ACTUAL BIG3 finals (~8; n=8 over 2025-26) because real
+# games compress — the trailing team rallies / the leader coasts to 50, a dynamic
+# an i.i.d. race can't produce (confirmed: margin is invariant to LEAGUE_PPP and
+# floors at ~9 even with zero scoring variance). So scale the projected winning
+# GAP toward the empirical level, keeping the winner at the race-ending ~50 and
+# lifting the loser: even games then read ~51-43 / total ~94 / margin ~8 (matches
+# the sample). NOTE: a level correction tuned to a SMALL sample — not per-game
+# variety (that needs a comeback term + more games). Set to 1.0 to disable.
+MARGIN_CAL = 0.75
+
 # Distribution of points scored *when a possession results in a score*.
 # Reflects BIG3's 2/3/4-pt shots plus the occasional single bonus free throw.
 #   value : probability
@@ -182,19 +193,20 @@ def simulate(score_a, score_b, ppp_a, ppp_b, sims=DEFAULT_SIMS, seed=None):
     p_a = 100.0 * a_wins / sims
     mean_win = sum_win / sims          # winner ~50-51 (race-to-50 floor)
     mean_lose = sum_lose / sims
-    # BIG3 ends only when a team reaches 50 (by >=2), so a projected winner below
-    # 50 is an impossible scoreline -- the projected final must show the winner at
-    # the race-ending ~50. Assign the winning scoreline to the more likely winner
-    # and derive spread & total FROM that final, so the three numbers always
-    # agree: proj_home + proj_away == total and proj_home - proj_away == spread.
-    # The spread is therefore the projected WINNING margin (~8-10, the typical
-    # BIG3 gap) and win% is the separate likelihood -- in a near-even game the
-    # spread can be ~8 while win% ~50%, which is the nature of a race-to-target
-    # game (the win% bar carries the real closeness).
+    # BIG3 ends only when a team reaches 50 (by >=2), so the projected winner is
+    # shown at the race-ending ~50. The raw i.i.d. gap (~10-11) overstates real
+    # margins (~8), so compress it by MARGIN_CAL toward the empirical level while
+    # keeping the winner at ~50 and lifting the loser (-> ~51-43 / total ~94 /
+    # margin ~8 for an even game). Spread & total are derived FROM this final so
+    # the three always agree; the spread is the projected WINNING margin and win%
+    # is the separate likelihood (a near-even game can show ~8 margin at ~50% — the
+    # win% bar carries the real closeness).
+    cal_gap = (mean_win - mean_lose) * MARGIN_CAL
+    win_score, lose_score = mean_win, mean_win - cal_gap
     if p_a >= 50.0:
-        proj_home, proj_away = int(round(mean_win)), int(round(mean_lose))
+        proj_home, proj_away = int(round(win_score)), int(round(lose_score))
     else:
-        proj_home, proj_away = int(round(mean_lose)), int(round(mean_win))
+        proj_home, proj_away = int(round(lose_score)), int(round(win_score))
     out = {
         "p_home": round(p_a, 1),
         "p_away": round(100.0 - p_a, 1),
@@ -209,11 +221,13 @@ def simulate(score_a, score_b, ppp_a, ppp_b, sims=DEFAULT_SIMS, seed=None):
     if h1_n:                                            # projected first half
         h1_win = h1_sum_win / h1_n                       # team first to 25 (~25)
         h1_lose = h1_sum_lose / h1_n
+        h1_gap = (h1_win - h1_lose) * MARGIN_CAL         # same compression at the half
+        h1w, h1l = h1_win, h1_win - h1_gap
         p_h1_home = 100.0 * h1_home_first / h1_n
         if p_h1_home >= 50.0:
-            out["h1_home"], out["h1_away"] = int(round(h1_win)), int(round(h1_lose))
+            out["h1_home"], out["h1_away"] = int(round(h1w)), int(round(h1l))
         else:
-            out["h1_home"], out["h1_away"] = int(round(h1_lose)), int(round(h1_win))
+            out["h1_home"], out["h1_away"] = int(round(h1l)), int(round(h1w))
         out["h1_total"] = out["h1_home"] + out["h1_away"]
         out["p_h1_home"] = round(p_h1_home, 1)
     return out
@@ -875,6 +889,7 @@ PAGE_HTML = r"""<!DOCTYPE html>
       <span class="pill">Race to <b>50</b> · win by <b>2</b> · no OT</span>
       <span class="pill">Halftime at <b>25</b></span>
       <span class="pill">Shots <b>2/3/4</b> pts</span>
+      <span class="pill" style="border-color:var(--yel);color:var(--yel)">Read <b>win%</b> + <b>total</b> first</span>
     </div>
   </div>
 </header>
@@ -890,6 +905,10 @@ PAGE_HTML = r"""<!DOCTYPE html>
     Model: Monte-Carlo race-to-target simulation honoring BIG3 scoring limits
     (first to 50 win-by-2, halftime at 25, cumulative 2/3/4-pt scoring).
     Win % &amp; projected finals come from <span id="nsim"></span> simulated games per matchup.
+    <b>Read the win % and total first</b> — in a race to 50 the winner is always ~51, so the
+    scoreline only varies by margin. Margins are <b>calibrated</b> to recent BIG3 results
+    (~51-43 / total ~94 / margin ~8 for an even game); with only a handful of games played,
+    matchup differentiation is still thin, so treat the exact scoreline as a low-confidence estimate.
     Data: big3.com feed · Auto-refreshes every 30s.
   </div>
 </div>
