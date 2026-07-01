@@ -28,6 +28,7 @@ import json
 import math
 import os
 import random
+import statistics
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -110,9 +111,45 @@ MIN_MPG_THRESHOLD = 10.0
 # as a loud but fragile edge (mirrors the WNBA engine's thin-sample flag).
 THIN_SAMPLE_GP = 8
 
-# Minimum edge to flag as a bet candidate
+# Minimum |sim median - line| edge required to emit a recommendation
+# (wired into calc_ev_sim 2026-07-01; previously defined but unused).
 PTS_EDGE_THRESHOLD = 1.5
 REB_EDGE_THRESHOLD = 1.0
+PR_EDGE_THRESHOLD = 2.0
+
+# Model version stamp, printed in the PDF header so tracker rows can be
+# attributed to the model that produced them. Bump when projection logic changes.
+MODEL_VERSION = "2026-07-01"
+
+# Recommendation gates (2026-07-01): a rec is emitted only when ALL hold —
+# blended EV >= MIN_REC_EV, |median − line| >= the prop's edge threshold, the
+# consensus line is quoted by >= MIN_REC_BOOKS books (when book data exists),
+# and the model's probability differs from the market's by >= MIN_REC_PROB_DELTA.
+# WNBA tracker evidence (593 graded picks): every stated-EV bucket below 25
+# lost money and absolute EV had ~zero correlation with winning — small stated
+# edges are almost entirely model noise + hold, so they no longer produce picks.
+MIN_REC_EV = 5.0
+MIN_REC_BOOKS = 3
+MIN_REC_PROB_DELTA = 0.04
+
+# Home-court advantage on scoring efficiency: NBA HCA ~3.0 pts (±1.5 per side)
+# over an ~115-pt team score ≈ ±1.3%. 0 at neutral sites.
+HCA_PCT = 0.013
+
+# Shrink per-minute rates toward the league average when the weighted-minutes
+# sample is thin. A full 15-game window (~260+ weighted minutes) is essentially
+# unshrunk; a 2-3 game sample regresses hard toward league average so it
+# can't post extreme ppm/rpm that turn into phantom edges.
+RATE_SHRINK_FULL_WMIN = 240.0
+LEAGUE_AVG_PPM = 0.48   # ~115 team pts / 240 team player-minutes
+LEAGUE_AVG_RPM = 0.18   # ~44 team reb / 240 team player-minutes
+
+# ESPN's injury feed rarely says doubtful/questionable — day-to-day is the
+# common game-time-decision status. Those players stay in the projections
+# (they usually play) but are flagged "gtd" in the output, and their potential
+# absence redistributes to teammates at partial strength.
+GTD_STATUSES = {"day-to-day", "questionable", "game-time-decision"}
+GTD_P_OUT = 0.45  # rough share of day-to-day listings that end up sitting
 
 # ESPN team name mapping
 ESPN_TO_CSV = {
@@ -180,6 +217,7 @@ def fetch_schedule(date_str: str) -> list[dict]:
             "short_name": event["shortName"],
             "status": status,
             "start_time": event.get("date", ""),
+            "neutral_site": comp.get("neutralSite", False),
             "home": None,
             "away": None,
             "spread": None,
@@ -524,7 +562,18 @@ def fetch_odds_api_props(
             if not pid:
                 continue
             for prefix, lines in mkts.items():
-                # Pick consensus line: line offered by the most distinct books
+                # Pick consensus line: line offered by the most distinct books.
+                # Ties break to the line closest to the book-weighted median,
+                # then to the HIGHER line. (The old lower-line tie-break
+                # mechanically inflated p_over and edge for the same sim
+                # distribution — the opposite of the "neutrality" it claimed —
+                # feeding the tracker's losing OVER skew.)
+                obs = [
+                    ln for ln, s in lines.items()
+                    for _ in ({bk for _, bk in s["over"]} | {bk for _, bk in s["under"]})
+                ]
+                med_line = statistics.median(obs) if obs else 0.0
+
                 def line_score(item):
                     line, sides = item
                     books = set()
@@ -532,8 +581,7 @@ def fetch_odds_api_props(
                         books.add(bk)
                     for odds, bk in sides["under"]:
                         books.add(bk)
-                    # Tie-breaker: prefer lower line for over-side EV neutrality
-                    return (len(books), -line)
+                    return (len(books), -abs(line - med_line), line)
 
                 line, sides = max(lines.items(), key=line_score)
                 if not sides["over"] or not sides["under"]:
@@ -549,6 +597,31 @@ def fetch_odds_api_props(
                 best_over = max(sides["over"], key=lambda t: t[0])
                 best_under = max(sides["under"], key=lambda t: t[0])
 
+                # Consensus market anchor at the consensus line: de-vig each
+                # book that posted BOTH sides and take the median fair p_over,
+                # plus median decimal prices per side. The best-of-book pair
+                # above can carry ~zero hold (two outlier prices from different
+                # books), so the model/market blend in calc_ev_sim anchors to
+                # this consensus instead of the outlier pair.
+                over_by_bk = {bk: od for od, bk in sides["over"]}
+                under_by_bk = {bk: od for od, bk in sides["under"]}
+                both_bks = sorted(set(over_by_bk) & set(under_by_bk))
+                cons_p_over = None
+                cons_over_dec = cons_under_dec = None
+                if both_bks:
+                    fair_ps = []
+                    for bk in both_bks:
+                        io = implied_probability(over_by_bk[bk])
+                        iu = implied_probability(under_by_bk[bk])
+                        if io + iu > 0:
+                            fair_ps.append(io / (io + iu))
+                    if fair_ps:
+                        cons_p_over = statistics.median(fair_ps)
+                    cons_over_dec = statistics.median(
+                        american_to_decimal(over_by_bk[bk]) for bk in both_bks)
+                    cons_under_dec = statistics.median(
+                        american_to_decimal(under_by_bk[bk]) for bk in both_bks)
+
                 entry = event_out.setdefault(pid, {})
                 entry[f"{prefix}_line"] = line
                 entry[f"{prefix}_over_odds"] = best_over[0]
@@ -556,6 +629,9 @@ def fetch_odds_api_props(
                 entry[f"{prefix}_over_book"] = BOOK_SHORT.get(best_over[1], best_over[1][:3].upper())
                 entry[f"{prefix}_under_book"] = BOOK_SHORT.get(best_under[1], best_under[1][:3].upper())
                 entry[f"{prefix}_book_count"] = len({bk for _, bk in sides["over"]} | {bk for _, bk in sides["under"]})
+                entry[f"{prefix}_mkt_p_over"] = cons_p_over
+                entry[f"{prefix}_cons_over_dec"] = cons_over_dec
+                entry[f"{prefix}_cons_under_dec"] = cons_under_dec
 
                 # Retain every book's line + over/under odds (across ALL lines
                 # offered, not just the consensus one) so the report can list
@@ -605,85 +681,130 @@ def implied_probability(american: int) -> float:
         return abs(american) / (abs(american) + 100)
 
 
-# Blend weight for combining the model's simulated probability with the
-# market's no-vig probability before computing EV.
-#   1.0 = trust the model entirely, 0.0 = trust the market entirely.
-# The closing line is the single sharpest estimator available, so anchoring
-# partially to it trims false edges — especially on thin-sample players
-# (rookies, injury returns, role changes) where the sim is overconfident.
-MODEL_BLEND_WEIGHT = 0.70
+# Maximum weight given to the model's simulated probability when blending with
+# the market's no-vig probability (sample-aware: w = MAX * gp/(gp+HALF), so a
+# 25-game vet gets ~0.24 and a 5-game rookie ~0.14). Was a flat 0.70 — the
+# WNBA tracker showed picks claiming an average ~70% win probability realized
+# 50.6% over 579 graded picks, and solving the post-fix rows for the weight
+# that matches reality gives w ≈ 0.24. The market is the sharper estimator;
+# the model's job is to find the rare big disagreements.
+MODEL_BLEND_W_MAX = 0.30
+MODEL_BLEND_GP_HALF = 6  # current-season games at which w reaches half its max
+
+# Bootstrap sims draw from ~15 atoms (effective sample ~10), so an empirical
+# p of 0/1 is sampling noise, not certainty — clamp before blending.
+MODEL_P_CLAMP = 0.02
+
+
+def _no_signal(median, line) -> dict:
+    """EV dict carrying no betting signal (degenerate or empty simulation)."""
+    return {
+        "median": round(median, 1), "edge": round(median - line, 1),
+        "p_over": 0.5, "p_under": 0.5,
+        "p_over_model": 0.5, "p_over_mkt": 0.5,
+        "ev_over": 0.0, "ev_under": 0.0, "rec": "", "blend_w": 0.0,
+    }
 
 
 def calc_ev_sim(sim_outcomes: list[float], line: float, over_odds: int,
-                under_odds: int) -> dict:
-    """
-    Calculate expected value for Over and Under bets using Monte Carlo
-    simulation results instead of a normal distribution.
+                under_odds: int, cur_season_gp: int | None = None,
+                mkt_p_over: float | None = None,
+                cons_over_dec: float | None = None,
+                cons_under_dec: float | None = None,
+                book_count: int | None = None,
+                edge_threshold: float = 0.0) -> dict:
+    """Compute EV from Monte-Carlo outcomes vs sportsbook odds.
 
-    sim_outcomes: list of simulated stat values (e.g., 10000 simulated point totals)
-    line: the sportsbook prop line
-    over_odds / under_odds: American odds
-
-    The model's simulated win probability is de-vigged against the market's
-    no-vig implied probability and the two are blended (MODEL_BLEND_WEIGHT)
-    before EV is computed, so the recommendation leans on the market where
-    the model is least certain.
-
-    Returns dict with median, edge, p_over, p_under, ev_over, ev_under, rec.
+    The model's simulated win probability is blended with the market's no-vig
+    probability before EV. The market anchor prefers the consensus fair price
+    (mkt_p_over, median across books) over de-vigging the best-of-book pair,
+    whose cross-book hold can be ~zero. The blend weight scales with the
+    current-season sample size, and a recommendation is only emitted when it
+    clears the MIN_REC_* gates plus the prop's edge threshold — small stated
+    edges were empirically pure noise.
     """
     n = len(sim_outcomes)
     if n == 0:
-        return {"edge": 0, "p_over": 0.5, "p_under": 0.5,
-                "ev_over": 0, "ev_under": 0, "rec": "", "median": 0}
+        return _no_signal(0, line)
 
     sorted_out = sorted(sim_outcomes)
     median = sorted_out[n // 2]
 
-    # Empirical probabilities from simulation
-    # Props pay on strict over/under (hitting exactly = push, which we split)
+    # A point-mass simulation (deterministic fallback for <3 logged games)
+    # carries zero distributional information: p_over would be exactly 0 or 1
+    # and the blend would still claim a monster edge. Emit no signal.
+    if sorted_out[0] == sorted_out[-1]:
+        return _no_signal(median, line)
+
     count_over = sum(1 for v in sim_outcomes if v > line)
     count_push = sum(1 for v in sim_outcomes if v == line)
-    count_under = sum(1 for v in sim_outcomes if v < line)
 
-    # Push = half win half loss (standard half-point convention)
+    # Model probabilities (pushes split evenly), clamped away from certainty.
     p_over_model = (count_over + count_push * 0.5) / n
-    p_under_model = (count_under + count_push * 0.5) / n
+    p_over_model = min(max(p_over_model, MODEL_P_CLAMP), 1 - MODEL_P_CLAMP)
+    p_under_model = 1.0 - p_over_model
 
-    # Market no-vig probabilities — strip the bookmaker hold so we blend
-    # against a fair price rather than the vigged one.
-    imp_over = implied_probability(over_odds)
-    imp_under = implied_probability(under_odds)
-    vig_total = imp_over + imp_under
-    if vig_total > 0:
-        mkt_p_over = imp_over / vig_total
-        mkt_p_under = imp_under / vig_total
+    # Market probability: consensus fair price when available, else de-vig
+    # the passed odds pair (a real single-book pair in the per-book EV path).
+    if mkt_p_over is not None:
+        mkt_p_over_used = mkt_p_over
     else:
-        mkt_p_over, mkt_p_under = p_over_model, p_under_model
+        imp_over = implied_probability(over_odds)
+        imp_under = implied_probability(under_odds)
+        vig_total = imp_over + imp_under
+        mkt_p_over_used = imp_over / vig_total if vig_total > 0 else p_over_model
+    mkt_p_under_used = 1.0 - mkt_p_over_used
 
-    # Blend model with market (complementary, so they still sum to 1).
-    w = MODEL_BLEND_WEIGHT
-    p_over = w * p_over_model + (1 - w) * mkt_p_over
-    p_under = w * p_under_model + (1 - w) * mkt_p_under
+    # Sample-aware blend weight: trust the sim less the thinner the
+    # current-season sample behind it.
+    if cur_season_gp is None:
+        w = MODEL_BLEND_W_MAX * 0.8
+    else:
+        gp = max(0, cur_season_gp)
+        w = MODEL_BLEND_W_MAX * gp / (gp + MODEL_BLEND_GP_HALF)
+
+    p_over = w * p_over_model + (1 - w) * mkt_p_over_used
+    p_under = w * p_under_model + (1 - w) * mkt_p_under_used
 
     edge = median - line
 
-    # Decimal odds
     dec_over = american_to_decimal(over_odds)
     dec_under = american_to_decimal(under_odds)
 
-    # EV = P(win) * profit - P(lose) * stake
     ev_over = p_over * (dec_over - 1) - (1 - p_over) * 1
     ev_under = p_under * (dec_under - 1) - (1 - p_under) * 1
 
     ev_over_pct = ev_over * 100
     ev_under_pct = ev_under * 100
 
-    if ev_over_pct > ev_under_pct and ev_over_pct > 0:
-        rec = "OVER"
-    elif ev_under_pct > ev_over_pct and ev_under_pct > 0:
-        rec = "UNDER"
+    if ev_over_pct > ev_under_pct:
+        rec, rec_ev = "OVER", ev_over_pct
+    elif ev_under_pct > ev_over_pct:
+        rec, rec_ev = "UNDER", ev_under_pct
     else:
-        rec = ""
+        rec, rec_ev = "", 0.0
+
+    # Recommendation gates — all must hold, otherwise the EVs are still
+    # reported but no side is recommended.
+    if rec:
+        if rec_ev < MIN_REC_EV:
+            rec = ""
+        elif abs(edge) < edge_threshold:
+            rec = ""
+        elif book_count is not None and 0 < book_count < MIN_REC_BOOKS:
+            # 0 = single-source fallback with no book attribution (allowed);
+            # 1-2 books at the consensus line = too thin to trust the price.
+            rec = ""
+        elif abs(p_over_model - mkt_p_over_used) < MIN_REC_PROB_DELTA:
+            rec = ""
+        elif rec == "OVER" and over_odds >= 100 and cons_over_dec:
+            # Plus-money best price is often a stale outlier: only keep the
+            # rec if it would ALSO be +EV at the consensus price.
+            if p_over * (cons_over_dec - 1) - (1 - p_over) <= 0:
+                rec = ""
+        elif rec == "UNDER" and under_odds >= 100 and cons_under_dec:
+            if p_under * (cons_under_dec - 1) - (1 - p_under) <= 0:
+                rec = ""
 
     return {
         "median": round(median, 1),
@@ -691,10 +812,11 @@ def calc_ev_sim(sim_outcomes: list[float], line: float, over_odds: int,
         "p_over": round(p_over, 3),
         "p_under": round(p_under, 3),
         "p_over_model": round(p_over_model, 3),
-        "p_over_mkt": round(mkt_p_over, 3),
+        "p_over_mkt": round(mkt_p_over_used, 3),
         "ev_over": round(ev_over_pct, 1),
         "ev_under": round(ev_under_pct, 1),
         "rec": rec,
+        "blend_w": round(w, 3),
     }
 
 
@@ -713,6 +835,7 @@ def simulate_player(
     pace_adj: float,
     usage_boost: float,
     max_min_cap: float = 44.0,
+    hca_mult: float = 1.0,
 ) -> dict:
     """
     Run a correlated bootstrap Monte Carlo for a player's points and rebounds.
@@ -732,7 +855,7 @@ def simulate_player(
 
     if n_games < 3 or expected_min < 1:
         # Not enough data — fall back to deterministic projection (rounded to int)
-        det_pts = round(expected_min * ppm * (1 + usage_boost) * opp_def_adj * pace_adj)
+        det_pts = round(expected_min * ppm * (1 + usage_boost) * opp_def_adj * pace_adj * hca_mult)
         det_reb = round(expected_min * rpm * reb_opp_adj * pace_adj)
         return {
             "sim_pts": [det_pts] * NUM_SIMS,
@@ -748,12 +871,16 @@ def simulate_player(
     # average of the last 15. ──
     weights = GAME_WEIGHTS[:n_games]
 
-    # Compute minute variability: std dev of actual minutes played
+    # Minutes variability: recency-weighted std of the same window, so an old
+    # role (e.g. bench minutes before a promotion) doesn't inflate the minute
+    # noise around the player's current role.
     game_minutes = [g["min"] for g in recent]
-    avg_min = sum(game_minutes) / n_games
-    if avg_min > 0:
+    w_sum = sum(weights)
+    w_avg_min = sum(w * m for w, m in zip(weights, game_minutes)) / w_sum
+    if w_avg_min > 0:
         min_std = max(
-            (sum((m - avg_min) ** 2 for m in game_minutes) / n_games) ** 0.5,
+            (sum(w * (m - w_avg_min) ** 2
+                 for w, m in zip(weights, game_minutes)) / w_sum) ** 0.5,
             1.5,  # floor: at least 1.5 min std dev
         )
     else:
@@ -786,7 +913,7 @@ def simulate_player(
         scale = sim_min / g["min"]
 
         # Apply today's matchup adjustments (same factors as deterministic)
-        pts = max(round(g["pts"] * scale * (1 + usage_boost) * opp_def_adj * pace_adj), 0)
+        pts = max(round(g["pts"] * scale * (1 + usage_boost) * opp_def_adj * pace_adj * hca_mult), 0)
         reb = max(round(g["reb"] * scale * reb_opp_adj * pace_adj), 0)
 
         sim_pts.append(pts)
@@ -841,6 +968,14 @@ def compute_player_stats(games: list[dict]) -> dict | None:
     # Rebounds per minute (weighted)
     w_reb = sum(w * g["reb"] for w, g in zip(weights, recent))
     rpm = w_reb / total_w_min if total_w_min > 0 else 0
+
+    # Shrink thin-sample rates toward the league prior (empirical-Bayes style):
+    # a full window keeps its rate essentially unchanged; a 2-3 game sample
+    # regresses hard toward league average so a hot fortnight can't post an
+    # extreme per-minute rate that turns into a phantom edge.
+    shrink = min(1.0, total_w_min / RATE_SHRINK_FULL_WMIN)
+    ppm = LEAGUE_AVG_PPM + (ppm - LEAGUE_AVG_PPM) * shrink
+    rpm = LEAGUE_AVG_RPM + (rpm - LEAGUE_AVG_RPM) * shrink
 
     # Average personal fouls per game (weighted)
     w_pf = sum(w * g["pf"] for w, g in zip(weights, recent))
@@ -920,6 +1055,7 @@ def project_player(
     team_b2b: bool,
     injured_teammates: list[dict],
     player_recent_events: list | None = None,
+    neutral_site: bool = False,
 ) -> dict:
     """
     Project expected minutes, points, and rebounds for a player.
@@ -948,7 +1084,10 @@ def project_player(
                 num += w
         return (num / den) if den else 1.0
 
-    presence = {tm["id"]: _presence(tm) for tm in injured_teammates}
+    # p_out scales a day-to-day teammate's redistribution to partial strength
+    # (an OUT/DOUBTFUL teammate carries p_out = 1.0).
+    presence = {tm["id"]: _presence(tm) * tm.get("p_out", 1.0)
+                for tm in injured_teammates}
 
     # B2B adjustment (by age)
     b2b_adj = 0.0
@@ -968,12 +1107,11 @@ def project_player(
         if abs_spread > 8:
             blowout_adj = -0.6 * (abs_spread - 8)
 
-    # Foul trouble adjustment
+    # Foul-trouble trait deduction removed (2026-07-01): chronic foul rate is
+    # already priced into weighted_mpg from the same 15-game window, so the
+    # flat deduction double-counted it (~1 min permanent haircut on bigs, the
+    # archetype anchoring the rebounds market).
     foul_adj = 0.0
-    if stats["avg_pf"] >= 3.5:
-        foul_adj = -1.0
-    elif stats["avg_pf"] >= 3.0:
-        foul_adj = -0.5
 
     # Injury redistribution: estimate extra minutes from absent teammates
     injury_min_boost = 0.0
@@ -1039,9 +1177,20 @@ def project_player(
     team_pace = team_ratings.get("pace", LEAGUE_AVG_PACE)
     opp_pace = opp_ratings.get("pace", LEAGUE_AVG_PACE)
     game_pace = (team_pace + opp_pace) / 2
-    pace_adj = game_pace / LEAGUE_AVG_PACE
+    # Normalize tonight's expected game pace by the average pace embedded in
+    # the player's own sample (~own team pace + league-average opponents).
+    # Dividing by the league average alone re-applied half the team's pace
+    # deviation that ppm/rpm already carry — a persistent ~2-3% inflation on
+    # every fast-team player (and symmetric deflation on slow teams).
+    pace_adj = (2 * game_pace) / (team_pace + LEAGUE_AVG_PACE)
 
-    expected_pts = expected_min * adjusted_ppm * opp_def_adj * pace_adj
+    # Home-court advantage on scoring efficiency (0 at neutral sites).
+    if neutral_site:
+        hca_mult = 1.0
+    else:
+        hca_mult = 1.0 + HCA_PCT if is_home else 1.0 - HCA_PCT
+
+    expected_pts = expected_min * adjusted_ppm * opp_def_adj * pace_adj * hca_mult
 
     # ── C. Expected Rebounds ──
 
@@ -1091,6 +1240,7 @@ def project_player(
         "reb_opp_adj": round(reb_opp_adj, 3),
         "pace_adj": round(pace_adj, 3),
         "usage_boost": round(usage_boost, 3),
+        "hca_mult": round(hca_mult, 3),
     }
 
 
@@ -1311,7 +1461,8 @@ def run_projections(date_str: str, generate_pdf: bool = False):
             injured = []
             for p in roster:
                 pid = p["id"]
-                if injuries_dict.get(pid) in ("out", "doubtful"):
+                status = injuries_dict.get(pid)
+                if status in ("out", "doubtful") or status in GTD_STATUSES:
                     s = stats_cache.get(pid)
                     tm_log = gamelog_cache.get(pid, [])
                     injured.append({
@@ -1319,6 +1470,9 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                         "name": p["name"],
                         "position": p["position"],
                         "stats": s,
+                        # Day-to-day teammates redistribute at partial strength
+                        # (they sit ~45% of the time); OUT/DOUBTFUL at full.
+                        "p_out": 1.0 if status in ("out", "doubtful") else GTD_P_OUT,
                         "events": {g["event_id"] for g in tm_log if g.get("event_id")},
                     })
             return injured
@@ -1351,9 +1505,13 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                     is_home=is_home,
                     spread=spread,
                     team_b2b=team_b2b,
-                    injured_teammates=injured_tms,
+                    # A day-to-day player is projected AND redistributes; never
+                    # let them absorb a boost from their own potential absence.
+                    injured_teammates=[tm for tm in injured_tms
+                                       if tm["id"] != pid],
                     player_recent_events=[g.get("event_id", "")
                                           for g in gamelog_cache.get(pid, [])[:15]],
+                    neutral_site=game.get("neutral_site", False),
                 )
 
                 # Run Monte Carlo simulation
@@ -1368,6 +1526,7 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                     pace_adj=proj["pace_adj"],
                     usage_boost=proj["usage_boost"],
                     max_min_cap=proj["max_min_cap"],
+                    hca_mult=proj["hca_mult"],
                 )
 
                 # Use simulation medians as the primary projection
@@ -1410,7 +1569,11 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                 # Merge prop lines + compute EV from the sim distribution.
                 # Book fields use .get() so ESPN-fallback props (no book
                 # attribution) merge cleanly with blank books / 0 count.
-                for prefix, sim_key in (("pts", "sim_pts"), ("reb", "sim_reb"), ("pr", "sim_pr")):
+                for prefix, sim_key, edge_thr in (
+                    ("pts", "sim_pts", PTS_EDGE_THRESHOLD),
+                    ("reb", "sim_reb", REB_EDGE_THRESHOLD),
+                    ("pr", "sim_pr", PR_EDGE_THRESHOLD),
+                ):
                     if f"{prefix}_line" in player_props:
                         entry[f"{prefix}_line"] = player_props[f"{prefix}_line"]
                         entry[f"{prefix}_over_odds"] = player_props[f"{prefix}_over_odds"]
@@ -1422,12 +1585,20 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                             sim[sim_key], player_props[f"{prefix}_line"],
                             player_props[f"{prefix}_over_odds"],
                             player_props[f"{prefix}_under_odds"],
+                            cur_season_gp=pstats["cur_season_games"],
+                            mkt_p_over=player_props.get(f"{prefix}_mkt_p_over"),
+                            cons_over_dec=player_props.get(f"{prefix}_cons_over_dec"),
+                            cons_under_dec=player_props.get(f"{prefix}_cons_under_dec"),
+                            book_count=player_props.get(f"{prefix}_book_count", 0),
+                            edge_threshold=edge_thr,
                         )
 
                         # Per-book EV: judge each book at ITS OWN line + odds
                         # against the same sim distribution, so the report can
                         # show where the best EV spot is (often not the book
                         # with the best raw price, if it sits on a worse line).
+                        # A single book's own pair is a real two-sided price,
+                        # so the pair de-vig fallback is the right anchor here.
                         all_books = player_props.get(f"{prefix}_all_books", [])
                         rows = []
                         for bk in all_books:
@@ -1436,6 +1607,8 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                             bk_ev = calc_ev_sim(
                                 sim[sim_key], bk["line"],
                                 bk["over_odds"], bk["under_odds"],
+                                cur_season_gp=pstats["cur_season_games"],
+                                edge_threshold=edge_thr,
                             )
                             rows.append({**bk, "ev": bk_ev})
 
@@ -1474,7 +1647,7 @@ def run_projections(date_str: str, generate_pdf: bool = False):
         injured_names = []
         if gd_match:
             for pid, status in gd_match["injuries"].items():
-                if status in ("out", "doubtful"):
+                if status in ("out", "doubtful") or status in GTD_STATUSES:
                     for pp in gd_match["home_players"] + gd_match["away_players"]:
                         if pp["id"] == pid:
                             injured_names.append(f"{pp['name']} ({status.upper()})")
@@ -1520,6 +1693,8 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                     notes.append(f"+{p['usage_boost']*100:.0f}%u")
                 if p.get("cur_season_gp", 99) < THIN_SAMPLE_GP:
                     notes.append(f"thin:{p['cur_season_gp']}")
+                if p.get("injury_status") in GTD_STATUSES:
+                    notes.append("GTD")
 
                 # Points prop (use simulation median)
                 sim_pts = p.get("sim_median_pts", p["expected_pts"])
@@ -1591,6 +1766,7 @@ def run_projections(date_str: str, generate_pdf: bool = False):
                 "ev_pct": best_ev, "book": book,
                 "n_books": p.get(f"{prefix}_book_count", 0),
                 "cur_season_gp": p.get("cur_season_gp", 99),
+                "injury_status": p.get("injury_status", "active"),
             })
 
     top_bets.sort(key=lambda x: x["ev_pct"], reverse=True)
@@ -1602,10 +1778,16 @@ def run_projections(date_str: str, generate_pdf: bool = False):
         print(f"  {'#':>2} {'Player':<22} {'Tm':>3} {'Game':>10} {'Prop':>8} "
               f"{'Line':>5} {'Sim':>5} {'Edge':>6} {'Rec':>5} {'EV%':>7} {'Book':>5} {'#Bk':>4}  {'Flag'}")
         print(f"  {'-'*120}")
-        thin_any = False
+        thin_any = gtd_any = False
         for i, b in enumerate(top_bets[:10], 1):
-            flag = f"thin:{b['cur_season_gp']}" if b["cur_season_gp"] < THIN_SAMPLE_GP else ""
-            thin_any = thin_any or bool(flag)
+            flags = []
+            if b["cur_season_gp"] < THIN_SAMPLE_GP:
+                flags.append(f"thin:{b['cur_season_gp']}")
+                thin_any = True
+            if b.get("injury_status") in GTD_STATUSES:
+                flags.append("gtd")
+                gtd_any = True
+            flag = ",".join(flags)
             print(
                 f"  {i:>2} {b['player']:<22} {b['team']:>3} {b['game']:>10} {b['prop']:>8} "
                 f"{b['line']:>5.1f} {b['sim']:>5} {b['edge']:>+6.1f} {b['rec']:>5} {b['ev_pct']:>+6.1f}% "
@@ -1614,6 +1796,12 @@ def run_projections(date_str: str, generate_pdf: bool = False):
         if thin_any:
             print(f"\n  Flag thin:N = projection based on only N games this season "
                   f"(< {THIN_SAMPLE_GP}); small sample - treat with caution.")
+        if gtd_any:
+            print(f"\n  Flag gtd = player is listed Day-To-Day (game-time decision) - "
+                  f"they sit ~{GTD_P_OUT:.0%} of the time; confirm active before betting.")
+    else:
+        print(f"\n  No recommendations cleared the gates today "
+              f"(EV >= {MIN_REC_EV:.0f}%, edge/book-count/model-vs-market filters).")
 
     # ── Generate PDF if requested ──
     if generate_pdf:
@@ -1707,6 +1895,7 @@ def generate_pdf_report(projections, games, game_data, date_str):
     elements.append(Paragraph(f"NBA Player Props Projections \u2014 {dt_label}", title_style))
     elements.append(Paragraph(
         f"Generated {datetime.now(ET).strftime('%Y-%m-%d %I:%M %p ET')} | "
+        f"Model v{MODEL_VERSION} | "
         f"Monte Carlo ({NUM_SIMS:,} sims) | "
         f"Lg Avg DRtg: {LEAGUE_AVG_DRTG:.1f} | Lg Avg Pace: {LEAGUE_AVG_PACE:.1f}",
         subtitle_style
@@ -1839,7 +2028,7 @@ def generate_pdf_report(projections, games, game_data, date_str):
         injured = []
         if gd_match:
             for pid, status in gd_match["injuries"].items():
-                if status in ("out", "doubtful"):
+                if status in ("out", "doubtful") or status in GTD_STATUSES:
                     for pp in gd_match["home_players"] + gd_match["away_players"]:
                         if pp["id"] == pid:
                             injured.append(f"{pp['name']} ({status.upper()})")
@@ -1847,7 +2036,7 @@ def generate_pdf_report(projections, games, game_data, date_str):
 
         header_text = f"{gname}  \u2014  Spread: {sp}  |  O/U: {ou}"
         if injured:
-            header_text += f"<br/><font size='8'>OUT: {', '.join(injured)}</font>"
+            header_text += f"<br/><font size='8'>INJ: {', '.join(injured)}</font>"
         elements.append(Paragraph(header_text, game_header_style))
 
         # Table data — columns:
@@ -1882,6 +2071,8 @@ def generate_pdf_report(projections, games, game_data, date_str):
                 notes.append(f"+{p['usage_boost']*100:.0f}%u")
             if p.get("cur_season_gp", 99) < THIN_SAMPLE_GP:
                 notes.append(f"thin:{p['cur_season_gp']}")
+            if p.get("injury_status") in GTD_STATUSES:
+                notes.append("GTD")
 
             pts_ev = p.get("pts_ev", {})
             reb_ev = p.get("reb_ev", {})
