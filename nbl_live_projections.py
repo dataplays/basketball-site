@@ -14,7 +14,6 @@ Usage:
 """
 
 import argparse
-import os
 import json
 import re
 import sys
@@ -607,8 +606,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<meta name="theme-color" content="#0f1923">
 <title>NBL Live Projections</title>
 <style>
   :root {
@@ -914,12 +911,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <header>
   <h1><span>NBL</span> Live Projections</h1>
   <div class="header-meta">
-    <a href="/" style="font-weight:600">&larr; Main Menu</a>
     <span>{{ date_display }}</span>
     <span>{{ total_games }} game{{ "s" if total_games != 1 }}</span>
     <span>HCA: &plusmn;{{ "%.1f"|format(hca_half) }} pts/side</span>
     <span>RTM: {{ blowout_threshold }}+ pt lead</span>
-    <a href="refresh">Refresh Ratings</a>
+    <a href="/refresh">Refresh Ratings</a>
     <span id="countdown-wrap">Next update: <span id="countdown">30</span>s</span>
   </div>
 </header>
@@ -973,7 +969,7 @@ function tick() {
   if (el) el.textContent = countdown;
   if (countdown <= 0) {
     countdown = interval;
-    fetch('api/games').then(r => r.json()).then(data => {
+    fetch('/api/games').then(r => r.json()).then(data => {
       document.getElementById('live-container').innerHTML = data.live_html;
       document.getElementById('upcoming-container').innerHTML = data.upcoming_html;
       document.getElementById('completed-container').innerHTML = data.completed_html;
@@ -1021,20 +1017,14 @@ LIVE_PARTIAL = r"""{% if games %}
     </div>
     <div class="proj-row">
       <div class="proj-stat">
-        <div class="proj-label">Poss</div>
-        <div class="proj-val">{{ g.poss_so_far }} / {{ g.poss_remaining }}</div>
-      </div>
-      <div class="proj-stat">
-        <div class="proj-label">{{ "1H Actual" if g.h1_is_actual else "1H Proj" }}</div>
-        <div class="proj-val">{{ g.away_1h_proj|int }} - {{ g.home_1h_proj|int }}</div>
+        <div class="proj-label">{{ "1H Margin" if g.h1_is_actual else "Exp 1H Margin" }}</div>
+        <div class="proj-val {{ 'spread-home' if g.proj_1h_spread > 0 else 'spread-away' }}">
+          {{ "H" if g.proj_1h_spread > 0 else "A" }} {{ "%.1f"|format(g.proj_1h_spread|abs) }}
+        </div>
       </div>
       <div class="proj-stat">
         <div class="proj-label">1H Total</div>
         <div class="proj-val">{{ g.proj_1h_total|int }}</div>
-      </div>
-      <div class="proj-stat">
-        <div class="proj-label">Proj Final</div>
-        <div class="proj-val">{{ g.away_final|int }} - {{ g.home_final|int }}</div>
       </div>
       <div class="proj-stat">
         <div class="proj-label">Spread</div>

@@ -2367,20 +2367,14 @@ LIVE_PARTIAL = r"""{% if games %}
     </div>
     <div class="proj-row">
       <div class="proj-stat">
-        <label>Est. Possessions</label>
-        <span class="val">{{ g.poss_so_far }} / {{ g.total_expected_poss }}</span>
-      </div>
-      <div class="proj-stat">
-        <label>{{ "1H Final" if g.h1_is_actual else "1H Proj" }}</label>
-        <span class="val">{{ g.away_1h_proj }} - {{ g.home_1h_proj }}</span>
+        <label>{{ "1H Margin" if g.h1_is_actual else "Exp 1H Margin" }}</label>
+        <span class="val {{ 'spread-home' if g.proj_1h_spread > 0 else 'spread-away' }}">
+          {{ "Home" if g.proj_1h_spread > 0 else "Away" }} {{ "%.1f"|format(g.proj_1h_spread|abs) }}
+        </span>
       </div>
       <div class="proj-stat">
         <label>{{ "1H Total" if g.h1_is_actual else "1H Proj Total" }}</label>
         <span class="val">{{ g.proj_1h_total }}</span>
-      </div>
-      <div class="proj-stat">
-        <label>Projected Final</label>
-        <span class="val">{{ g.away_final }} - {{ g.home_final }}</span>
       </div>
       <div class="proj-stat">
         <label>Proj Spread</label>
@@ -2395,10 +2389,6 @@ LIVE_PARTIAL = r"""{% if games %}
     </div>
     {% if g.live_pace is not none %}
     <div class="proj-row" style="border-top:1px dashed rgba(255,255,255,.12);margin-top:4px;padding-top:8px">
-      <div class="proj-stat">
-        <label>Actual Pace</label>
-        <span class="val">{{ g.live_pace }}</span>
-      </div>
       {% if g.pace_away_1h_final is not none %}
       <div class="proj-stat">
         <label>Actual 1H</label>
