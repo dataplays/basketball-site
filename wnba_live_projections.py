@@ -29,6 +29,7 @@ import argparse
 import csv
 import html as htmlmod
 import json
+import os
 import re
 import sys
 import time
@@ -798,6 +799,265 @@ def compute_live_pace_stats(g: dict) -> dict:
     return out
 
 
+# ── Live betting lines (The Odds API) ──
+#
+# Pulls consensus spread + total for the FULL GAME and the FIRST HALF from
+# The Odds API (spreads/totals + the spreads_h1/totals_h1 additional markets),
+# so the live cards can show the market line next to the model's projection and
+# the edge between them. Only live games are fetched, cached ~30s, and the
+# whole feature degrades to a hidden row if the key/quota/match is unavailable.
+
+THE_ODDS_API_KEY = os.environ.get(
+    "THE_ODDS_API_KEY", "fdb2de0728216509287d06490355c922"
+)
+ODDS_API_BASE = "https://api.the-odds-api.com/v4/sports/basketball_wnba"
+# Full-game + first-half spread/total. The _h1 markets are "additional
+# markets" only available on the per-event odds endpoint (not the bulk feed).
+ODDS_MARKETS = "spreads,totals,spreads_h1,totals_h1"
+# Books averaged into the consensus line (skip soft/sweepstakes books).
+ODDS_ALLOWED_BOOKS = {
+    "draftkings", "fanduel", "betmgm", "williamhill_us",
+    "betrivers", "espnbet",
+}
+LINES_CACHE_TTL = 30           # per-game line cache; ~aligns with the 30s UI refresh
+ODDS_EVENTS_TTL = 120          # the /events list changes slowly
+
+_lines_lock = threading.Lock()
+_lines_cache: dict[str, tuple[dict, float]] = {}     # oa_event_id -> (lines, ts)
+_odds_events_cache: dict = {"events": [], "ts": 0.0}
+
+EMPTY_LINES = {
+    "mkt_spread_home": None, "mkt_total": None,
+    "mkt_1h_spread_home": None, "mkt_1h_total": None,
+    "mkt_book_count": 0,
+}
+
+
+def _odds_http_json(url: str, timeout: int = 15):
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
+
+
+def _norm_team(s: str) -> str:
+    return " ".join((s or "").lower().split())
+
+
+def _median(vals: list) -> float | None:
+    xs = sorted(v for v in vals if v is not None)
+    if not xs:
+        return None
+    n = len(xs)
+    mid = n // 2
+    return xs[mid] if n % 2 else (xs[mid - 1] + xs[mid]) / 2.0
+
+
+def _odds_events() -> list:
+    """Cached list of WNBA events from The Odds API (free /events endpoint)."""
+    now = time.monotonic()
+    with _lines_lock:
+        if now - _odds_events_cache["ts"] < ODDS_EVENTS_TTL and _odds_events_cache["events"]:
+            return _odds_events_cache["events"]
+    if not THE_ODDS_API_KEY:
+        return []
+    try:
+        events = _odds_http_json(f"{ODDS_API_BASE}/events?apiKey={THE_ODDS_API_KEY}")
+    except Exception:
+        return _odds_events_cache["events"]
+    if not isinstance(events, list):
+        return _odds_events_cache["events"]
+    with _lines_lock:
+        _odds_events_cache["events"] = events
+        _odds_events_cache["ts"] = now
+    return events
+
+
+def _match_odds_event(game: dict, events: list) -> dict | None:
+    """Match an ESPN game to an Odds API event by team locations.
+
+    ESPN gives the location ("Atlanta"); The Odds API gives the full name
+    ("Atlanta Dream"), so a location-substring match on both sides is enough.
+    """
+    away = _norm_team(game["away_name"])
+    home = _norm_team(game["home_name"])
+    for e in events:
+        if away in _norm_team(e.get("away_team", "")) and home in _norm_team(e.get("home_team", "")):
+            return e
+    return None
+
+
+def fetch_game_lines(oa_event_id: str, home_team_name: str) -> dict:
+    """Consensus spread/total (full game + 1H) for one Odds API event.
+
+    Spread is stored home-oriented (the home team's handicap: negative = home
+    favored). Returns all-None on any failure. Cached per event ~LINES_CACHE_TTL.
+    """
+    now = time.monotonic()
+    with _lines_lock:
+        hit = _lines_cache.get(oa_event_id)
+        if hit and now - hit[1] < LINES_CACHE_TTL:
+            return hit[0]
+    if not THE_ODDS_API_KEY:
+        return dict(EMPTY_LINES)
+    url = (f"{ODDS_API_BASE}/events/{oa_event_id}/odds?apiKey={THE_ODDS_API_KEY}"
+           f"&regions=us&markets={ODDS_MARKETS}&oddsFormat=american")
+    try:
+        data = _odds_http_json(url)
+    except Exception:
+        return dict(EMPTY_LINES)
+
+    home_norm = _norm_team(home_team_name)
+    sp, tot, sp1, tot1, books = [], [], [], [], set()
+    for bm in data.get("bookmakers", []):
+        if bm.get("key") not in ODDS_ALLOWED_BOOKS:
+            continue
+        used = False
+        for m in bm.get("markets", []):
+            k = m.get("key")
+            outs = m.get("outcomes", [])
+            if k in ("spreads", "spreads_h1"):
+                for o in outs:
+                    if _norm_team(o.get("name", "")) == home_norm and o.get("point") is not None:
+                        (sp if k == "spreads" else sp1).append(float(o["point"]))
+                        used = True
+            elif k in ("totals", "totals_h1"):
+                pts = [o.get("point") for o in outs if o.get("point") is not None]
+                if pts:
+                    (tot if k == "totals" else tot1).append(float(pts[0]))
+                    used = True
+        if used:
+            books.add(bm["key"])
+
+    out = {
+        "mkt_spread_home": _median(sp),
+        "mkt_total": _median(tot),
+        "mkt_1h_spread_home": _median(sp1),
+        "mkt_1h_total": _median(tot1),
+        "mkt_book_count": len(books),
+    }
+    with _lines_lock:
+        _lines_cache[oa_event_id] = (out, now)
+    return out
+
+
+def fetch_lines_for_games(games: list) -> dict[str, dict]:
+    """Consensus market lines for the LIVE games, keyed by ESPN game_id."""
+    if not THE_ODDS_API_KEY:
+        return {}
+    live = [g for g in games if g.get("state") == "in"]
+    if not live:
+        return {}
+    events = _odds_events()
+    if not events:
+        return {}
+
+    jobs = []  # (game_id, oa_event_id, oa_home_name)
+    for g in live:
+        ev = _match_odds_event(g, events)
+        if ev:
+            jobs.append((g["game_id"], ev["id"], ev.get("home_team", "")))
+    if not jobs:
+        return {}
+
+    from concurrent.futures import ThreadPoolExecutor
+    results: dict[str, dict] = {}
+    with ThreadPoolExecutor(max_workers=min(len(jobs), 6)) as pool:
+        futures = {pool.submit(fetch_game_lines, eid, hn): gid
+                   for gid, eid, hn in jobs}
+        for fut in futures:
+            gid = futures[fut]
+            try:
+                results[gid] = fut.result(timeout=12)
+            except Exception:
+                pass
+    return results
+
+
+def _fmt_market_spread(home_line) -> str:
+    """Book-style favorite display from a home-oriented handicap."""
+    if home_line is None:
+        return "—"
+    if abs(home_line) < 0.05:
+        return "PK"
+    fav = "Home" if home_line < 0 else "Away"
+    return f"{fav} -{abs(home_line):.1f}"
+
+
+def _spread_edge(proj_spread: float, home_line) -> tuple[str, str]:
+    """Edge on the spread from the projection's view.
+
+    proj_spread is home_final - away_final (+ = home favored); the market's
+    expected home margin is -home_line, so edge = proj_spread + home_line.
+    Positive => projection favors the HOME side, negative => the AWAY side.
+    Returns (display, css_class).
+    """
+    if home_line is None:
+        return "", ""
+    e = proj_spread + home_line
+    if abs(e) < 0.05:
+        return "even", "edge-sm"
+    side = "Home" if e > 0 else "Away"
+    cls = "edge-pos" if abs(e) >= 1.0 else "edge-sm"
+    return f"{side} +{abs(e):.1f}", cls
+
+
+def _total_edge(proj_total: float, mkt_total) -> tuple[str, str]:
+    """Edge on the total: proj - market (+ => Over lean)."""
+    if mkt_total is None:
+        return "", ""
+    e = proj_total - mkt_total
+    if abs(e) < 0.05:
+        return "even", "edge-sm"
+    side = "Over" if e > 0 else "Under"
+    cls = "edge-pos" if abs(e) >= 1.0 else "edge-sm"
+    return f"{side} +{abs(e):.1f}", cls
+
+
+def attach_market_lines(game: dict, raw: dict | None) -> None:
+    """Merge consensus market lines + projection-vs-market edges into a game.
+
+    Always sets the display fields (defaults to em-dash / hidden) so the
+    template can reference them unconditionally.
+    """
+    game.update({
+        "has_lines": False, "mkt_book_count": 0,
+        "mkt_spread_home": None, "mkt_total": None,
+        "mkt_1h_spread_home": None, "mkt_1h_total": None,
+        "mkt_spread_disp": "—", "mkt_total_disp": "—",
+        "mkt_1h_spread_disp": "—", "mkt_1h_total_disp": "—",
+        "edge_spread_disp": "", "edge_spread_cls": "",
+        "edge_total_disp": "", "edge_total_cls": "",
+        "edge_1h_spread_disp": "", "edge_1h_spread_cls": "",
+        "edge_1h_total_disp": "", "edge_1h_total_cls": "",
+    })
+    if not raw:
+        return
+
+    sh = raw.get("mkt_spread_home")
+    tot = raw.get("mkt_total")
+    sh1 = raw.get("mkt_1h_spread_home")
+    tot1 = raw.get("mkt_1h_total")
+    if not any(v is not None for v in (sh, tot, sh1, tot1)):
+        return
+
+    game["has_lines"] = True
+    game["mkt_book_count"] = raw.get("mkt_book_count", 0)
+    game["mkt_spread_home"] = sh
+    game["mkt_total"] = tot
+    game["mkt_1h_spread_home"] = sh1
+    game["mkt_1h_total"] = tot1
+
+    game["mkt_spread_disp"] = _fmt_market_spread(sh)
+    game["mkt_1h_spread_disp"] = _fmt_market_spread(sh1)
+    game["mkt_total_disp"] = f"{tot:.1f}" if tot is not None else "—"
+    game["mkt_1h_total_disp"] = f"{tot1:.1f}" if tot1 is not None else "—"
+
+    game["edge_spread_disp"], game["edge_spread_cls"] = _spread_edge(game["proj_spread"], sh)
+    game["edge_1h_spread_disp"], game["edge_1h_spread_cls"] = _spread_edge(game["proj_1h_spread"], sh1)
+    game["edge_total_disp"], game["edge_total_cls"] = _total_edge(game["proj_total"], tot)
+    game["edge_1h_total_disp"], game["edge_1h_total_cls"] = _total_edge(game["proj_1h_total"], tot1)
+
+
 # ── HTML Template ──
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -997,6 +1257,25 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .proj-stat .val.spread-away { color: var(--blue); }
   .proj-stat.box-pace { border: 1px dashed rgba(224,64,160,0.45); }
   .proj-stat.box-pace label { color: var(--accent); }
+
+  .proj-row.market-row {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--card-border);
+  }
+  .proj-stat.market { border: 1px solid rgba(255,193,7,0.40); }
+  .proj-stat.market label { color: var(--amber); }
+  .proj-stat .edge {
+    display: block;
+    margin-top: 3px;
+    font-size: 0.7em;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-muted);
+  }
+  .proj-stat .edge.edge-pos { color: var(--green); }
+  .proj-stat.market.mkt-meta { flex: 0 0 auto; min-width: 62px; }
+  .market-note { color: var(--amber); }
 
   .detail-row {
     margin-top: 6px;
@@ -1233,6 +1512,34 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <span class="val">{% if g.pace_proj_total is not none %}{{ g.pace_proj_total }}{% else %}&mdash;{% endif %}</span>
         </div>
       </div>
+      {% if g.has_lines %}
+      <div class="proj-row market-row">
+        <div class="proj-stat market">
+          <label>Mkt 1H Spread</label>
+          <span class="val">{{ g.mkt_1h_spread_disp }}</span>
+          {% if g.edge_1h_spread_disp %}<span class="edge {{ g.edge_1h_spread_cls }}">{{ g.edge_1h_spread_disp }}</span>{% endif %}
+        </div>
+        <div class="proj-stat market">
+          <label>Mkt 1H Total</label>
+          <span class="val">{{ g.mkt_1h_total_disp }}</span>
+          {% if g.edge_1h_total_disp %}<span class="edge {{ g.edge_1h_total_cls }}">{{ g.edge_1h_total_disp }}</span>{% endif %}
+        </div>
+        <div class="proj-stat market">
+          <label>Mkt Spread</label>
+          <span class="val">{{ g.mkt_spread_disp }}</span>
+          {% if g.edge_spread_disp %}<span class="edge {{ g.edge_spread_cls }}">{{ g.edge_spread_disp }}</span>{% endif %}
+        </div>
+        <div class="proj-stat market">
+          <label>Mkt Total</label>
+          <span class="val">{{ g.mkt_total_disp }}</span>
+          {% if g.edge_total_disp %}<span class="edge {{ g.edge_total_cls }}">{{ g.edge_total_disp }}</span>{% endif %}
+        </div>
+        <div class="proj-stat market mkt-meta">
+          <label>Books</label>
+          <span class="val">{{ g.mkt_book_count }}</span>
+        </div>
+      </div>
+      {% endif %}
       <div class="fouls-row">
         <div class="foul-team">
           <span class="foul-label">{{ g.away_abbrev }}</span>
@@ -1448,6 +1755,34 @@ LIVE_PARTIAL = r"""{% if games %}
         <span class="val">{% if g.pace_proj_total is not none %}{{ g.pace_proj_total }}{% else %}&mdash;{% endif %}</span>
       </div>
     </div>
+    {% if g.has_lines %}
+    <div class="proj-row market-row">
+      <div class="proj-stat market">
+        <label>Mkt 1H Spread</label>
+        <span class="val">{{ g.mkt_1h_spread_disp }}</span>
+        {% if g.edge_1h_spread_disp %}<span class="edge {{ g.edge_1h_spread_cls }}">{{ g.edge_1h_spread_disp }}</span>{% endif %}
+      </div>
+      <div class="proj-stat market">
+        <label>Mkt 1H Total</label>
+        <span class="val">{{ g.mkt_1h_total_disp }}</span>
+        {% if g.edge_1h_total_disp %}<span class="edge {{ g.edge_1h_total_cls }}">{{ g.edge_1h_total_disp }}</span>{% endif %}
+      </div>
+      <div class="proj-stat market">
+        <label>Mkt Spread</label>
+        <span class="val">{{ g.mkt_spread_disp }}</span>
+        {% if g.edge_spread_disp %}<span class="edge {{ g.edge_spread_cls }}">{{ g.edge_spread_disp }}</span>{% endif %}
+      </div>
+      <div class="proj-stat market">
+        <label>Mkt Total</label>
+        <span class="val">{{ g.mkt_total_disp }}</span>
+        {% if g.edge_total_disp %}<span class="edge {{ g.edge_total_cls }}">{{ g.edge_total_disp }}</span>{% endif %}
+      </div>
+      <div class="proj-stat market mkt-meta">
+        <label>Books</label>
+        <span class="val">{{ g.mkt_book_count }}</span>
+      </div>
+    </div>
+    {% endif %}
     <div class="fouls-row">
       <div class="foul-team">
         <span class="foul-label">{{ g.away_abbrev }}</span>
@@ -1612,6 +1947,12 @@ def fetch_and_project() -> tuple[list[dict], list[dict], list[dict], str, str | 
                 "current_period": 0,
             })
         g.update(compute_live_pace_stats(g))
+
+    # Live betting lines (spread/total, full game + 1H) for the live games,
+    # attached to every game so the template fields always exist.
+    lines_map = fetch_lines_for_games(projected)
+    for g in projected:
+        attach_market_lines(g, lines_map.get(g["game_id"]))
 
     live = sorted(
         [g for g in projected if g["state"] == "in"],
