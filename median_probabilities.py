@@ -49,6 +49,16 @@ def default_phi(stat: str) -> float:
     return 1.30  # rebounds
 
 
+# Best-fit distribution per stat. Points are a weighted sum of makes (≈ normal
+# by CLT); rebounds and assists are right-skewed counts the neg-binomial fits
+# better. Selecting a stat snaps the model here, but the user can still override.
+BEST_MODEL = {
+    "points": "normal",
+    "rebounds": "negbinom",
+    "assists": "negbinom",
+}
+
+
 def round_half(x: float) -> float:
     return round(x * 2) / 2
 
@@ -232,17 +242,18 @@ TEMPLATE = """
 
     <div class="panel">
       <form method="post">
+        <input type="hidden" name="prev_stat" value="{{ prev_stat }}">
         <div>
           <label for="stat">Stat</label>
-          <select name="stat" id="stat">
+          <select name="stat" id="stat" onchange="this.form.submit()">
             <option value="points" {% if stat == 'points' %}selected{% endif %}>Points</option>
             <option value="rebounds" {% if stat == 'rebounds' %}selected{% endif %}>Rebounds</option>
             <option value="assists" {% if stat == 'assists' %}selected{% endif %}>Assists</option>
           </select>
         </div>
         <div>
-          <label for="model">Model</label>
-          <select name="model" id="model">
+          <label for="model">Model <span style="text-transform:none;letter-spacing:0;color:var(--muted)">(auto by stat)</span></label>
+          <select name="model" id="model" onchange="this.form.submit()">
             <option value="normal" {% if model == 'normal' %}selected{% endif %}>Normal</option>
             <option value="negbinom" {% if model == 'negbinom' %}selected{% endif %}>Negative binomial</option>
           </select>
@@ -352,9 +363,16 @@ def index():
     if stat not in ("points", "rebounds", "assists"):
         stat = "points"
 
-    model = request.values.get("model", "normal")
-    if model not in ("normal", "negbinom"):
-        model = "normal"
+    # Model selection: when the stat just changed (or on first load), snap to
+    # the best model for that stat; otherwise honor the submitted model so an
+    # explicit override sticks. `prev_stat` carries the stat that produced the
+    # current form so we can tell a stat-change from a model/median change.
+    prev_stat = request.values.get("prev_stat", "")
+    req_model = request.values.get("model", "")
+    if prev_stat != stat or req_model not in ("normal", "negbinom"):
+        model = BEST_MODEL[stat]
+    else:
+        model = req_model
 
     try:
         median = float(request.values.get("median", 20.5))
@@ -397,6 +415,7 @@ def index():
     return render_template_string(
         TEMPLATE,
         stat=stat,
+        prev_stat=stat,
         model=model,
         eff_model=eff_model,
         points_nb_fallback=points_nb_fallback,
