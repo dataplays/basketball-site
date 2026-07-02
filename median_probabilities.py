@@ -1,8 +1,9 @@
 """
 Basketball Median Probabilities Dashboard
 
-Given a player's median points or rebounds for a game (rounded to nearest 0.5),
-compute the probabilities of each half-integer line from median-5 to median+5.
+Given a player's median points, rebounds, or assists for a game (rounded to
+nearest 0.5), compute the probabilities of each half-integer line from
+median-5 to median+5.
 
 Uses a normal distribution centered on the median. Default SDs scale with the
 median and stat type, matching typical NBA game-to-game variance. The user can
@@ -29,6 +30,10 @@ def default_sigma(stat: str, median: float) -> float:
     if stat == "points":
         # Points SD ~30% of median, floor 4.0 (low-scoring role players still have variance)
         return max(4.0, 0.30 * median)
+    if stat == "assists":
+        # Assists are the streakiest of the three (teammate/matchup dependent):
+        # SD ~42% of median, floor 1.6
+        return max(1.6, 0.42 * median)
     # Rebounds SD ~38% of median, floor 1.8
     return max(1.8, 0.38 * median)
 
@@ -141,7 +146,7 @@ TEMPLATE = """
   <div class="container">
     <a href="/" style="color:var(--accent);text-decoration:none;font-size:14px;font-weight:600;display:inline-block;margin-bottom:12px">&larr; Main Menu</a>
     <h1>Basketball Median Probabilities</h1>
-    <div class="sub">Set a player's game median (points or rebounds) and see the Over/Under probability at each half-point line around it.</div>
+    <div class="sub">Set a player's game median (points, rebounds, or assists) and see the Over/Under probability at each half-point line around it.</div>
 
     <div class="panel">
       <form method="post">
@@ -150,6 +155,7 @@ TEMPLATE = """
           <select name="stat" id="stat">
             <option value="points" {% if stat == 'points' %}selected{% endif %}>Points</option>
             <option value="rebounds" {% if stat == 'rebounds' %}selected{% endif %}>Rebounds</option>
+            <option value="assists" {% if stat == 'assists' %}selected{% endif %}>Assists</option>
           </select>
         </div>
         <div>
@@ -209,7 +215,7 @@ TEMPLATE = """
         </tbody>
       </table>
       <div class="note">
-        Probabilities use a normal distribution N(median, σ²). Each line is a half-integer, so no pushes are possible. Auto-SD scales with the median: points ≈ max(4.0, 0.30×median), rebounds ≈ max(1.8, 0.38×median). Odds shown are <b>fair (no-vig) American odds</b> derived directly from the probabilities.
+        Probabilities use a normal distribution N(median, σ²). Each line is a half-integer, so no pushes are possible. Auto-SD scales with the median: points ≈ max(4.0, 0.30×median), rebounds ≈ max(1.8, 0.38×median), assists ≈ max(1.6, 0.42×median). Odds shown are <b>fair (no-vig) American odds</b> derived directly from the probabilities.
       </div>
     </div>
   </div>
@@ -221,7 +227,7 @@ TEMPLATE = """
 @app.route("/", methods=["GET", "POST"])
 def index():
     stat = request.values.get("stat", "points")
-    if stat not in ("points", "rebounds"):
+    if stat not in ("points", "rebounds", "assists"):
         stat = "points"
 
     try:
