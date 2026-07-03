@@ -799,6 +799,82 @@ def compute_live_pace_stats(g: dict) -> dict:
     return out
 
 
+def compute_true_pace_proj(g: dict) -> dict:
+    """Extrapolate at tonight's OBSERVED pace with SEASON-LONG scoring rates.
+
+    The Actual row extrapolates live box-score pace x live in-game PPP; the
+    Expected (model) row uses season pace x season PPP. This hybrid holds the
+    observed box-score pace (tempo stabilizes much faster than shooting) but
+    scores the remaining possessions at each team's opponent-adjusted
+    season-long rates, with the model's time-scaled HCA and blowout RTM — so
+    the only input that differs from the Expected row is the pace.
+    """
+    out = {
+        "tp_pace": None,
+        "tp_away_final": None, "tp_home_final": None,
+        "tp_total": None, "tp_margin": None,
+        "tp_away_1h": None, "tp_home_1h": None,
+        "tp_1h_total": None, "tp_1h_margin": None,
+    }
+    true_pace = g.get("live_pace")   # set by compute_live_pace_stats (>=3 min gate)
+    if g.get("state") != "in" or not true_pace or true_pace <= 0:
+        return out
+
+    elapsed = g.get("time_elapsed") or 0.0
+    remaining = g.get("time_remaining") or 0.0
+
+    # Season-long opponent-adjusted PPP — same construction as project_game.
+    nat_avg = RATINGS["national_avg_oe"]
+    away_ppp = (g["away_oe"] * g["home_de"]) / nat_avg / 100.0
+    home_ppp = (g["home_oe"] * g["away_de"]) / nat_avg / 100.0
+
+    hca_pts = 0.0 if g.get("neutral_site", False) else HCA_POINTS
+
+    # Blowout RTM (mirrors project_game): at a 12+ point lead both teams'
+    # PPPs regress toward league average, scaled by lead size and remaining
+    # time. (project_game's per-side branches reduce to the same algebra.)
+    regress = 0.0
+    lead = abs(g["home_score"] - g["away_score"])
+    if lead >= BLOWOUT_THRESHOLD:
+        lead_frac = min((lead - BLOWOUT_THRESHOLD) /
+                        (BLOWOUT_LEAD_CAP - BLOWOUT_THRESHOLD), 1.0)
+        regress = BLOWOUT_MAX_REGRESS * lead_frac * (remaining / REGULATION_MIN)
+    away_ppp_adj = away_ppp + regress * (1.0 - away_ppp)
+    home_ppp_adj = home_ppp + regress * (1.0 - home_ppp)
+
+    rem_poss = true_pace * (remaining / REGULATION_MIN)
+    hca_rem = (hca_pts / 2.0) * (remaining / REGULATION_MIN)
+    away_final = g["away_score"] + rem_poss * away_ppp_adj - hca_rem
+    home_final = g["home_score"] + rem_poss * home_ppp_adj + hca_rem
+
+    out.update({
+        "tp_pace": round(true_pace, 1),
+        "tp_away_final": round(away_final, 1),
+        "tp_home_final": round(home_final, 1),
+        "tp_total": round(away_final + home_final, 1),
+        "tp_margin": round(home_final - away_final, 1),
+    })
+
+    # 1H extrapolation — only while the first half is in progress (after
+    # halftime the actual 1H is known and shown by the model row). RTM is
+    # not applied here, matching project_game's in-progress 1H calc.
+    half_min = 2 * QUARTER_MIN
+    if g.get("period", 0) <= 2 and elapsed < half_min:
+        rem_1h_min = half_min - elapsed
+        rem_1h_poss = true_pace * (rem_1h_min / REGULATION_MIN)
+        hca_1h = (hca_pts / 2.0) * (rem_1h_min / REGULATION_MIN)
+        away_1h = g["away_score"] + rem_1h_poss * away_ppp - hca_1h
+        home_1h = g["home_score"] + rem_1h_poss * home_ppp + hca_1h
+        out.update({
+            "tp_away_1h": round(away_1h, 1),
+            "tp_home_1h": round(home_1h, 1),
+            "tp_1h_total": round(away_1h + home_1h, 1),
+            "tp_1h_margin": round(home_1h - away_1h, 1),
+        })
+
+    return out
+
+
 # ── Live betting lines (The Odds API) ──
 #
 # Pulls consensus spread + total for the FULL GAME and the FIRST HALF from
@@ -1258,6 +1334,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .proj-stat.box-pace { border: 1px dashed rgba(224,64,160,0.45); }
   .proj-stat.box-pace label { color: var(--accent); }
 
+  .proj-row.tpace-row {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--card-border);
+  }
+  .proj-stat.tpace { border: 1px dashed rgba(38,198,218,0.55); }
+  .proj-stat.tpace label { color: #26c6da; }
+
   .proj-row.market-row {
     margin-top: 6px;
     padding-top: 6px;
@@ -1512,6 +1596,37 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
           <span class="val">{% if g.pace_proj_total is not none %}{{ g.pace_proj_total }}{% else %}&mdash;{% endif %}</span>
         </div>
       </div>
+      {% if g.tp_total is not none %}
+      <div class="proj-row tpace-row">
+        <div class="proj-stat tpace">
+          <label>True Pace</label>
+          <span class="val">{{ g.tp_pace }}</span>
+          <span class="edge">exp {{ g.game_pace }}</span>
+        </div>
+        {% if g.tp_1h_total is not none %}
+        <div class="proj-stat tpace">
+          <label>TP 1H Margin</label>
+          <span class="val {{ 'spread-home' if g.tp_1h_margin > 0 else 'spread-away' }}">
+            {{ "Home" if g.tp_1h_margin > 0 else "Away" }} {{ "%.1f"|format(g.tp_1h_margin|abs) }}
+          </span>
+        </div>
+        <div class="proj-stat tpace">
+          <label>TP 1H Total</label>
+          <span class="val">{{ g.tp_1h_total }}</span>
+        </div>
+        {% endif %}
+        <div class="proj-stat tpace">
+          <label>TP Margin</label>
+          <span class="val {{ 'spread-home' if g.tp_margin > 0 else 'spread-away' }}">
+            {{ "Home" if g.tp_margin > 0 else "Away" }} {{ "%.1f"|format(g.tp_margin|abs) }}
+          </span>
+        </div>
+        <div class="proj-stat tpace">
+          <label>TP Total</label>
+          <span class="val">{{ g.tp_total }}</span>
+        </div>
+      </div>
+      {% endif %}
       {% if g.has_lines %}
       <div class="proj-row market-row">
         <div class="proj-stat market">
@@ -1755,6 +1870,37 @@ LIVE_PARTIAL = r"""{% if games %}
         <span class="val">{% if g.pace_proj_total is not none %}{{ g.pace_proj_total }}{% else %}&mdash;{% endif %}</span>
       </div>
     </div>
+    {% if g.tp_total is not none %}
+    <div class="proj-row tpace-row">
+      <div class="proj-stat tpace">
+        <label>True Pace</label>
+        <span class="val">{{ g.tp_pace }}</span>
+        <span class="edge">exp {{ g.game_pace }}</span>
+      </div>
+      {% if g.tp_1h_total is not none %}
+      <div class="proj-stat tpace">
+        <label>TP 1H Margin</label>
+        <span class="val {{ 'spread-home' if g.tp_1h_margin > 0 else 'spread-away' }}">
+          {{ "Home" if g.tp_1h_margin > 0 else "Away" }} {{ "%.1f"|format(g.tp_1h_margin|abs) }}
+        </span>
+      </div>
+      <div class="proj-stat tpace">
+        <label>TP 1H Total</label>
+        <span class="val">{{ g.tp_1h_total }}</span>
+      </div>
+      {% endif %}
+      <div class="proj-stat tpace">
+        <label>TP Margin</label>
+        <span class="val {{ 'spread-home' if g.tp_margin > 0 else 'spread-away' }}">
+          {{ "Home" if g.tp_margin > 0 else "Away" }} {{ "%.1f"|format(g.tp_margin|abs) }}
+        </span>
+      </div>
+      <div class="proj-stat tpace">
+        <label>TP Total</label>
+        <span class="val">{{ g.tp_total }}</span>
+      </div>
+    </div>
+    {% endif %}
     {% if g.has_lines %}
     <div class="proj-row market-row">
       <div class="proj-stat market">
@@ -1947,6 +2093,7 @@ def fetch_and_project() -> tuple[list[dict], list[dict], list[dict], str, str | 
                 "current_period": 0,
             })
         g.update(compute_live_pace_stats(g))
+        g.update(compute_true_pace_proj(g))
 
     # Live betting lines (spread/total, full game + 1H) for the live games,
     # attached to every game so the template fields always exist.
