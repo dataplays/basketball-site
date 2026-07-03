@@ -1501,6 +1501,7 @@ def fetch_box_for_live_games(games: list[dict]) -> dict[str, dict]:
 
 # Default (all-None) so the template's `is not none` checks are always safe.
 EMPTY_PACE = {
+    "pace_basis": None,       # None | "box" (box-score pace) | "score" (scoring rate)
     "live_box_poss": None, "live_pace": None,
     "pace_away_final": None, "pace_home_final": None,
     "pace_proj_total": None, "pace_proj_margin": None,
@@ -1510,57 +1511,94 @@ EMPTY_PACE = {
 
 
 def compute_live_pace_stats(g: dict) -> dict:
-    """Estimate current pace from the live box score and extrapolate.
+    """Extrapolate a live game's final from what's happening on the floor.
 
     Poss = FGA - ORB + TOV + 0.44*FTA per team, averaged, normalized to the
     league's regulation minutes. If that pace and each team's current PPP hold,
     project the final score, total, and margin — plus the 1H line while the
-    first half is still in progress. Needs box stats, so it only produces values
-    for ESPN-fed games; returns all-None otherwise.
+    first half is still in progress. Uses box stats when a feed provides them
+    (ESPN G-League/NBL + EuroLeague/EuroCup); otherwise falls back to the live
+    scoring rate for real-clock games, and returns all-None when neither basis
+    is available.
     """
     out = dict(EMPTY_PACE)
     if g.get("state") != "in":
-        return out
-    keys = ("away_fga", "away_orb", "away_tov", "away_fta",
-            "home_fga", "home_orb", "home_tov", "home_fta")
-    if any(g.get(k) is None for k in keys):
         return out
     elapsed = g.get("time_elapsed") or 0.0
     if elapsed < LIVE_PACE_MIN_ELAPSED:
         return out
 
     reg_min = _get_league_config(g["league_slug"]).get("reg_min", 40.0)
+    remaining = g.get("time_remaining") or 0.0
+    half_min = reg_min / 2.0
+    in_first_half = g.get("period", 0) <= 2 and elapsed < half_min
 
-    away_poss = g["away_fga"] - g["away_orb"] + g["away_tov"] + FT_POSS_COEF * g["away_fta"]
-    home_poss = g["home_fga"] - g["home_orb"] + g["home_tov"] + FT_POSS_COEF * g["home_fta"]
-    box_poss = (away_poss + home_poss) / 2.0
-    if box_poss <= 0:
+    box_keys = ("away_fga", "away_orb", "away_tov", "away_fta",
+                "home_fga", "home_orb", "home_tov", "home_fta")
+    has_box = all(g.get(k) is not None for k in box_keys)
+
+    if has_box:
+        away_poss = g["away_fga"] - g["away_orb"] + g["away_tov"] + FT_POSS_COEF * g["away_fta"]
+        home_poss = g["home_fga"] - g["home_orb"] + g["home_tov"] + FT_POSS_COEF * g["home_fta"]
+        box_poss = (away_poss + home_poss) / 2.0
+        if box_poss <= 0:
+            return out
+
+        live_pace = reg_min * box_poss / elapsed
+        rem_poss = live_pace * (remaining / reg_min)
+        away_ppp = g["away_score"] / box_poss
+        home_ppp = g["home_score"] / box_poss
+        away_final = g["away_score"] + rem_poss * away_ppp
+        home_final = g["home_score"] + rem_poss * home_ppp
+
+        out.update({
+            "pace_basis": "box",
+            "live_box_poss": round(box_poss, 1),
+            "live_pace": round(live_pace, 1),
+            "pace_away_final": round(away_final, 1),
+            "pace_home_final": round(home_final, 1),
+            "pace_proj_total": round(away_final + home_final, 1),
+            "pace_proj_margin": round(home_final - away_final, 1),   # home - away
+        })
+
+        if in_first_half:
+            rem_1h_poss = live_pace * ((half_min - elapsed) / reg_min)
+            away_1h = g["away_score"] + rem_1h_poss * away_ppp
+            home_1h = g["home_score"] + rem_1h_poss * home_ppp
+            out.update({
+                "pace_away_1h_final": round(away_1h, 1),
+                "pace_home_1h_final": round(home_1h, 1),
+                "pace_1h_total": round(away_1h + home_1h, 1),
+                "pace_1h_margin": round(home_1h - away_1h, 1),
+            })
         return out
 
-    live_pace = reg_min * box_poss / elapsed
-    remaining = g.get("time_remaining") or 0.0
-    rem_poss = live_pace * (remaining / reg_min)
+    # Fallback: no box stats (the api-sports summer leagues). Hold each team's
+    # current scoring RATE instead of a possession pace -- but only when the
+    # clock is real. An estimated clock's elapsed is inferred from the model's
+    # projected total, so extrapolating it would just echo the Expected row.
+    if g.get("clock_estimated"):
+        return out
+    away_score = g.get("away_score") or 0
+    home_score = g.get("home_score") or 0
+    if away_score + home_score <= 0:
+        return out
 
-    away_ppp = g["away_score"] / box_poss
-    home_ppp = g["home_score"] / box_poss
-    away_final = g["away_score"] + rem_poss * away_ppp
-    home_final = g["home_score"] + rem_poss * home_ppp
-
+    factor = (elapsed + remaining) / elapsed          # = total game minutes / elapsed
+    away_final = away_score * factor
+    home_final = home_score * factor
     out.update({
-        "live_box_poss": round(box_poss, 1),
-        "live_pace": round(live_pace, 1),
+        "pace_basis": "score",
         "pace_away_final": round(away_final, 1),
         "pace_home_final": round(home_final, 1),
         "pace_proj_total": round(away_final + home_final, 1),
         "pace_proj_margin": round(home_final - away_final, 1),   # home - away
     })
 
-    # 1H extrapolation only while the first half is still in progress.
-    half_min = reg_min / 2.0
-    if g.get("period", 0) <= 2 and elapsed < half_min:
-        rem_1h_poss = live_pace * ((half_min - elapsed) / reg_min)
-        away_1h = g["away_score"] + rem_1h_poss * away_ppp
-        home_1h = g["home_score"] + rem_1h_poss * home_ppp
+    if in_first_half:
+        f1h = half_min / elapsed
+        away_1h = away_score * f1h
+        home_1h = home_score * f1h
         out.update({
             "pace_away_1h_final": round(away_1h, 1),
             "pace_home_1h_final": round(home_1h, 1),
@@ -2387,8 +2425,11 @@ LIVE_PARTIAL = r"""{% if games %}
         <span class="val">{{ g.proj_total }}</span>
       </div>
     </div>
-    {% if g.live_pace is not none %}
+    {% if g.pace_basis %}
     <div class="proj-row" style="border-top:1px dashed rgba(255,255,255,.12);margin-top:4px;padding-top:8px">
+      <div style="flex-basis:100%;font-size:.62em;color:var(--text-muted);letter-spacing:.4px;text-align:left;margin:-2px 0 1px">
+        {% if g.pace_basis == "score" %}ACTUAL &middot; LIVE SCORING RATE (NO BOX SCORE FOR THIS LEAGUE){% else %}ACTUAL &middot; LIVE BOX-SCORE PACE{% endif %}
+      </div>
       {% if g.pace_away_1h_final is not none %}
       <div class="proj-stat">
         <label>Actual 1H</label>
