@@ -782,8 +782,8 @@ def compute_live_pace_stats(g: dict) -> dict:
         "pace_proj_margin": round(home_final - away_final, 1),
     })
 
-    # 1H extrapolation — only while the first half is still in progress
-    # (after halftime the actual 1H score is known and shown instead)
+    # 1H line: extrapolate while the first half is in progress; once it is
+    # over, show the ACTUAL first-half result so the 1H stays on the card.
     half_min = 2 * QUARTER_MIN
     if g.get("period", 0) <= 2 and elapsed < half_min:
         rem_1h_poss = live_pace * ((half_min - elapsed) / REGULATION_MIN)
@@ -794,6 +794,14 @@ def compute_live_pace_stats(g: dict) -> dict:
             "pace_home_1h_final": round(home_1h, 1),
             "pace_1h_total": round(away_1h + home_1h, 1),
             "pace_1h_margin": round(home_1h - away_1h, 1),
+        })
+    elif g.get("away_1h_score") is not None and g.get("home_1h_score") is not None:
+        a1h, h1h = float(g["away_1h_score"]), float(g["home_1h_score"])
+        out.update({
+            "pace_away_1h_final": a1h,
+            "pace_home_1h_final": h1h,
+            "pace_1h_total": a1h + h1h,
+            "pace_1h_margin": h1h - a1h,
         })
 
     return out
@@ -855,9 +863,9 @@ def compute_true_pace_proj(g: dict) -> dict:
         "tp_margin": round(home_final - away_final, 1),
     })
 
-    # 1H extrapolation — only while the first half is in progress (after
-    # halftime the actual 1H is known and shown by the model row). RTM is
-    # not applied here, matching project_game's in-progress 1H calc.
+    # 1H line: extrapolate while the first half is in progress; once it is
+    # over, show the ACTUAL first-half result so the 1H stays on the card.
+    # RTM is not applied here, matching project_game's in-progress 1H calc.
     half_min = 2 * QUARTER_MIN
     if g.get("period", 0) <= 2 and elapsed < half_min:
         rem_1h_min = half_min - elapsed
@@ -870,6 +878,14 @@ def compute_true_pace_proj(g: dict) -> dict:
             "tp_home_1h": round(home_1h, 1),
             "tp_1h_total": round(away_1h + home_1h, 1),
             "tp_1h_margin": round(home_1h - away_1h, 1),
+        })
+    elif g.get("away_1h_score") is not None and g.get("home_1h_score") is not None:
+        a1h, h1h = float(g["away_1h_score"]), float(g["home_1h_score"])
+        out.update({
+            "tp_away_1h": a1h,
+            "tp_home_1h": h1h,
+            "tp_1h_total": a1h + h1h,
+            "tp_1h_margin": h1h - a1h,
         })
 
     return out
