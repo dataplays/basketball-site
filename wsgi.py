@@ -69,6 +69,8 @@ DASH_COLORS = {
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
     "wnba_props_projections": "WNBA Player Props — Projections",
+    "nba_props_projections_2": "NBA Player Props 2 — Projections (pre-Jul-1 model rollback)",
+    "wnba_props_projections_2": "WNBA Player Props 2 — Projections (pre-Jul-1 model rollback)",
     "wnba_props_track": "WNBA Props — Tracker / Grading",
     "nba_props_track": "NBA Props — Tracker / Grading",
 }
