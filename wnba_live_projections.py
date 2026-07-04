@@ -1598,11 +1598,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
       {% if g.tp_total is not none %}
       <div class="proj-row tpace-row">
-        <div class="proj-stat tpace">
-          <label>True Pace</label>
-          <span class="val">{{ g.tp_pace }}</span>
-          <span class="edge">exp {{ g.game_pace }}</span>
-        </div>
         {% if g.tp_1h_total is not none %}
         <div class="proj-stat tpace">
           <label>TP 1H Margin</label>
@@ -1872,11 +1867,6 @@ LIVE_PARTIAL = r"""{% if games %}
     </div>
     {% if g.tp_total is not none %}
     <div class="proj-row tpace-row">
-      <div class="proj-stat tpace">
-        <label>True Pace</label>
-        <span class="val">{{ g.tp_pace }}</span>
-        <span class="edge">exp {{ g.game_pace }}</span>
-      </div>
       {% if g.tp_1h_total is not none %}
       <div class="proj-stat tpace">
         <label>TP 1H Margin</label>
