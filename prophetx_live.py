@@ -46,7 +46,7 @@ BOOK_CHIPS = [("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
               ("Pinnacle", "pinnacle"),
               ("Caesars", "caesars"), ("BetRivers", "betrivers"),
               ("theScore", "thescore"), ("FanDuel", "fanduel"),
-              ("Compare", "compare"), ("Recap", "recap")]
+              ("Compare", "compare"), ("Arbs", "arbs"), ("Recap", "recap")]
 # Books shown side-by-side in the Compare (line-shopping) grid, column order.
 COMPARE_BOOKS = ["prophetx", "kalshi", "pinnacle", "caesars", "betrivers", "thescore", "fanduel"]
 COMPARE_LABELS = {"prophetx": "ProphetX", "kalshi": "Kalshi", "pinnacle": "Pinnacle",
@@ -242,6 +242,163 @@ def build_compare(tournament: int):
     return out, ts
 
 
+# ── Arbs & middles: cross-book two-sided profit scan over COMPARE_BOOKS ───────
+# An ARB = best price on each side of a market (across books) whose implied
+# probabilities sum < 100% -> stake both sides, guaranteed profit. A MIDDLE =
+# opposing sides at DIFFERENT lines (Over L1 / Under L2, or Home -h / Away +a)
+# that leave a window where BOTH bets win. Free middles (implied sum < 100%) are
+# guaranteed-profit too; cheap+wide middles are shown as "costs x% unless it hits".
+MIDDLE_MAX_COST = 0.04    # show a non-free middle only if it costs <= this (of stake)
+MIDDLE_MIN_WIDTH = 1.0    # ...and its window is at least this wide (points)
+
+
+def _fnum(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _leg(o: dict, book: str, inv_total: float) -> dict:
+    dec = o["decimal"]
+    return {
+        "side": o["sel"], "book": book, "book_label": COMPARE_LABELS.get(book, book),
+        "american": o.get("american"), "decimal": round(dec, 3),
+        "limit": o.get("limit", 0), "betslip": o.get("betslip", ""),
+        "stake_pct": round(100.0 * (1.0 / dec) / inv_total, 1),   # equal-payout sizing
+    }
+
+
+def _fixture_opps(rows: list) -> list:
+    """Pure detector. rows = (stat, dir, thr, book, outcome) where stat in
+    {ml,total,spread}, dir in {'>','<',None} (side of the margin/total cutoff
+    `thr`). Returns arb/middle opportunity dicts. No I/O -> unit-testable."""
+    ml_best: dict = {}                 # sel -> (book, outcome)
+    gt_best: dict = {}                 # (stat, thr) -> (book, outcome)  '>' side
+    lt_best: dict = {}                 # (stat, thr) -> (book, outcome)  '<' side
+    for stat, d, thr, book, o in rows:
+        dec = o.get("decimal") or 0
+        if dec <= 1.0:
+            continue
+        if stat == "ml":
+            cur = ml_best.get(o["sel"])
+            if cur is None or dec > cur[1]["decimal"]:
+                ml_best[o["sel"]] = (book, o)
+        else:
+            tgt = gt_best if d == ">" else lt_best
+            k = (stat, thr)
+            cur = tgt.get(k)
+            if cur is None or dec > cur[1]["decimal"]:
+                tgt[k] = (book, o)
+
+    opps = []
+
+    def add(kind, market, line, window, gbook, go, lbook, lo_o):
+        inv = 1.0 / go["decimal"] + 1.0 / lo_o["decimal"]
+        opp = {
+            "type": kind, "market": market, "line": line,
+            "window": list(window) if window else None,
+            "profit_pct": round((1.0 / inv - 1.0) * 100.0, 2),   # guaranteed (min) return
+            "inv_sum": round(inv, 4),
+            "legs": [_leg(go, gbook, inv), _leg(lo_o, lbook, inv)],
+        }
+        if window:                     # if the total/margin lands in the window, BOTH win
+            opp["middle_payout_pct"] = round((2.0 / inv - 1.0) * 100.0, 2)
+        opps.append(opp)
+
+    # Moneyline arb (two distinct sides)
+    if len(ml_best) == 2:
+        (_sa, (ba, oa)), (_sb, (bb, ob)) = list(ml_best.items())
+        if 1.0 / oa["decimal"] + 1.0 / ob["decimal"] < 1.0:
+            add("arb", "moneyline", None, None, ba, oa, bb, ob)
+
+    # Totals & spreads: pair every '>' side with every '<' side
+    for stat in ("total", "spread"):
+        gts = sorted((thr, bk, o) for (s, thr), (bk, o) in gt_best.items() if s == stat)
+        lts = sorted((thr, bk, o) for (s, thr), (bk, o) in lt_best.items() if s == stat)
+        for lo_thr, gbk, go in gts:
+            for hi_thr, lbk, lo_o in lts:
+                if hi_thr < lo_thr:
+                    continue           # gap: both can LOSE, never both win -> not a middle
+                inv = 1.0 / go["decimal"] + 1.0 / lo_o["decimal"]
+                if hi_thr == lo_thr:
+                    if inv < 1.0:      # same line, opposite sides -> arb
+                        add("arb", stat, lo_thr, None, gbk, go, lbk, lo_o)
+                elif inv < 1.0 or ((inv - 1.0) <= MIDDLE_MAX_COST
+                                   and (hi_thr - lo_thr) >= MIDDLE_MIN_WIDTH):
+                    add("middle", stat, None, (lo_thr, hi_thr), gbk, go, lbk, lo_o)
+    return opps
+
+
+def compute_arbs_middles(tournament: int):
+    """Cross-book scan for two-sided guaranteed-profit bets (arbs) + middles.
+    Returns (games, ts); each game carries its ranked `opps`."""
+    def fetch(slug):
+        try:
+            return slug, cached_games(tournament, slug)
+        except px.OddsPapiError:
+            return slug, ([], 0.0)
+    with ThreadPoolExecutor(max_workers=len(COMPARE_BOOKS)) as ex:
+        per_book = dict(ex.map(fetch, COMPARE_BOOKS))
+
+    by_fix: dict = {}                  # fixture_id -> {slug: game}
+    meta_by_fix: dict = {}
+    for slug in COMPARE_BOOKS:
+        for g in per_book[slug][0]:
+            by_fix.setdefault(g["fixture_id"], {})[slug] = g
+            meta_by_fix.setdefault(g["fixture_id"], g)
+
+    out = []
+    for fid, meta in meta_by_fix.items():
+        home = (meta.get("home") or "").lower()
+        rows = []
+        for slug, g in by_fix[fid].items():
+            for m in g["markets"]:
+                if m.get("is_prop"):
+                    continue
+                mt, outs = m.get("mtype", ""), m["outcomes"]
+                if len(outs) != 2:
+                    continue
+                if mt in ("moneyline", "1x2"):
+                    for o in outs:
+                        rows.append(("ml", None, None, slug, o))
+                elif "total" in mt:
+                    L = _fnum(m.get("line"))
+                    if L is None:
+                        continue
+                    for o in outs:
+                        s = (o["sel"] or "").lower()
+                        d = ">" if s.startswith("over") else ("<" if s.startswith("under") else None)
+                        if d:
+                            rows.append(("total", d, L, slug, o))
+                elif "spread" in mt:
+                    L = _fnum(m.get("line"))
+                    if L is None:
+                        continue
+                    thr = -L            # cutoff on home margin (home - away)
+                    ho = next((o for o in outs if home and home in (o["sel"] or "").lower()), None)
+                    ao = next((o for o in outs if o is not ho), None)
+                    if ho and ao:
+                        rows.append(("spread", ">", thr, slug, ho))    # home covers if margin > thr
+                        rows.append(("spread", "<", thr, slug, ao))    # away covers if margin < thr
+        opps = _fixture_opps(rows)
+        if not opps:
+            continue
+        opps.sort(key=lambda x: (x["type"] != "arb", -x["profit_pct"]))
+        out.append({
+            "fixture_id": fid, "game": meta["game"],
+            "tournament": meta.get("tournament", ""), "status": meta.get("status", ""),
+            "live": meta.get("live", False), "start_epoch": meta.get("start_epoch"),
+            "opps": opps,
+            "n_arb": sum(1 for o in opps if o["type"] == "arb"),
+            "n_mid": sum(1 for o in opps if o["type"] == "middle"),
+        })
+    out.sort(key=lambda x: (not x["live"],
+                            -max((o["profit_pct"] for o in x["opps"]), default=0.0)))
+    ts = min((t for _, t in per_book.values() if t), default=0.0)
+    return out, ts
+
+
 def attach_fair(games: list, kappa: float, by_liability: bool = False) -> list:
     """Attach a fair/shaded line to each game's 2-way moneyline market (copy)."""
     out = []
@@ -393,6 +550,24 @@ def api_compare():
     columns = [[s, COMPARE_LABELS[s]] for s in COMPARE_BOOKS]
     return jsonify(ok=True, updated=ts, columns=columns,
                    count=len(games), games=games)
+
+
+@app.route("/api/arbs")
+def api_arbs():
+    if not KEY:
+        return jsonify(ok=False, error="ODDSPAPI_KEY not set on the server."), 200
+    try:
+        tournament = int(request.args.get("tournament", 0) or 0)
+    except ValueError:
+        tournament = 0
+    try:
+        games, ts = compute_arbs_middles(tournament)
+    except px.OddsPapiError as exc:
+        return jsonify(ok=False, error=str(exc)), 200
+    n_arb = sum(g["n_arb"] for g in games)
+    n_mid = sum(g["n_mid"] for g in games)
+    return jsonify(ok=True, updated=ts, count=n_arb + n_mid,
+                   n_arb=n_arb, n_mid=n_mid, games=games)
 
 
 @app.route("/api/recap")
@@ -613,6 +788,29 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
 .empty,.err{color:var(--muted);text-align:center;padding:60px 20px;font-size:15px}
 .err{color:#f0883e}
 .foot{color:var(--muted);font-size:11.5px;text-align:center;margin-top:24px;line-height:1.6}
+/* arbs & middles */
+.oppwrap{padding:9px 13px 13px;display:flex;flex-direction:column;gap:8px}
+.opp{border:1px solid var(--line);border-radius:9px;padding:8px 11px;background:var(--row)}
+.opp.arb{border-left:3px solid var(--accent)}
+.opp.mid{border-left:3px solid #d29922}
+.opphdr{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:6px}
+.otag{font-size:10.5px;font-weight:800;letter-spacing:.5px;border-radius:5px;padding:2px 7px}
+.otag.a{background:#15c39a22;color:var(--accent);border:1px solid #15c39a66}
+.otag.m{background:#d2992222;color:#e3b341;border:1px solid #d2992266}
+.omk{font-size:13.5px;font-weight:600;color:var(--txt)}
+.oprof{margin-left:auto;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.oprof.good{color:var(--accent)}
+.oprof.cost{color:#d29922}
+.midpay{font-size:11.5px;color:var(--muted);background:var(--card);border:1px solid var(--line);
+        border-radius:5px;padding:1px 7px;white-space:nowrap}
+.leg{display:flex;align-items:center;gap:10px;font-size:13px;padding:3px 0}
+.lbook{min-width:78px;font-weight:600;color:#58a6ff}
+.lside{flex:1;color:var(--txt)}
+.lodds{font-variant-numeric:tabular-nums;font-weight:700;min-width:52px;text-align:right}
+.lodds a{color:var(--accent);text-decoration:none}
+.lstake{font-variant-numeric:tabular-nums;color:var(--muted);min-width:60px;text-align:right}
+.llim{font-variant-numeric:tabular-nums;color:var(--money);min-width:86px;text-align:right;font-size:12px}
+@media(max-width:560px){.leg{flex-wrap:wrap;gap:5px 10px}.lside{flex-basis:100%;order:3}}
 </style></head>
 <body>
 <header>
@@ -647,6 +845,8 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
    <b>Compare</b> line-shops every market (moneyline, spreads, totals, props) across all books
    side-by-side &mdash; best price highlighted; spreads/totals/props are collapsible.<br>
    <b>Recap</b> pools every sportsbook's +EV-vs-ProphetX-no-vig bets into one ranked board.<br>
+   <b>Arbs</b> takes the best price on each side across every book and flags two-sided bets that
+   lock a profit (implied odds sum &lt; 100%), plus totals &amp; spread <b>middles</b> where both sides can win.<br>
    Auto-refreshes every 30s. For entertainment/informational use.</div>
 </main>
 <script>
@@ -863,6 +1063,47 @@ function renderCompare(d){
 
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
+function renderArbs(d){
+  const box=document.getElementById('games'), upd=document.getElementById('upd');
+  if(!d.ok){ box.innerHTML='<div class="err">'+esc(d.error||'Error loading arbs')+'</div>'; upd.textContent='error'; return; }
+  const t=new Date(d.updated*1000);
+  upd.textContent=(d.n_arb||0)+' arbs · '+(d.n_mid||0)+' middles · updated '+t.toLocaleTimeString();
+  if(!d.games||!d.games.length){
+    box.innerHTML='<div class="empty">No arbs or middles right now.<br><span style="font-size:13px">'+
+      'Scans the best price on each side across ProphetX, Kalshi, Pinnacle, Caesars, BetRivers, theScore &amp; FanDuel &mdash; '+
+      'flags any two-sided bet that locks a profit, plus totals &amp; spread middles.</span></div>';
+    return;
+  }
+  const MK={moneyline:'Moneyline',total:'Total',spread:'Spread'};
+  const leg=g=>{
+    const odds=(typeof g.american==='number')?amClass(g.american):(g.decimal+'');
+    const inner=g.betslip?'<a href="'+g.betslip+'" target="_blank" rel="noopener">'+odds+'</a>':odds;
+    const sz=g.limit?('<span class="llim">'+money(g.limit)+' avail</span>'):'';
+    return '<div class="leg"><span class="lbook">'+esc(g.book_label)+'</span>'+
+      '<span class="lside">'+esc(g.side)+'</span><span class="lodds">'+inner+'</span>'+
+      '<span class="lstake">bet '+g.stake_pct+'%</span>'+sz+'</div>';
+  };
+  box.innerHTML=d.games.map(g=>{
+    const badge=g.live?'<span class="badge live">Live</span>':'<span class="badge pre">'+esc(g.status||'Upcoming')+'</span>';
+    const opps=g.opps.map(o=>{
+      const isArb=o.type==='arb';
+      const mk=(MK[o.market]||o.market)+((o.line!=null)?(' '+o.line):'');
+      const win=o.window?(' &middot; middle <b>'+o.window[0]+'–'+o.window[1]+'</b>'):'';
+      const p=o.profit_pct;
+      const profTxt=(p>0)?('+'+p.toFixed(2)+'% locked'):(p.toFixed(2)+'% (cost unless it hits)');
+      const mid=(o.middle_payout_pct!=null)?('<span class="midpay">if it lands: +'+o.middle_payout_pct.toFixed(0)+'%</span>'):'';
+      return '<div class="opp '+(isArb?'arb':'mid')+'"><div class="opphdr">'+
+        '<span class="otag '+(isArb?'a':'m')+'">'+(isArb?'ARB':'MIDDLE')+'</span>'+
+        '<span class="omk">'+esc(mk)+win+'</span>'+
+        '<span class="oprof '+(p>0?'good':'cost')+'">'+profTxt+'</span>'+mid+'</div>'+
+        o.legs.map(leg).join('')+'</div>';
+    }).join('');
+    return '<div class="game"><div class="ghead"><span class="gteams">'+esc(g.game)+'</span>'+
+      '<span class="gtag">'+esc(g.tournament)+'</span>'+badge+'</div>'+
+      '<div class="oppwrap">'+opps+'</div></div>';
+  }).join('');
+}
+
 async function load(){
   if(busy || document.hidden) return; busy = true;
   const dot = document.getElementById('dot'); dot.classList.add('on');
@@ -871,6 +1112,9 @@ async function load(){
       const r = await fetch('api/compare?tournament='+TID);
       _lastCompare = await r.json();
       renderCompareDispatch();
+    } else if(VIEW==='arbs'){
+      const r = await fetch('api/arbs?tournament='+TID);
+      renderArbs(await r.json());
     } else if(VIEW==='recap'){
       const r = await fetch('api/recap?tournament='+TID);
       renderRecap(await r.json());
