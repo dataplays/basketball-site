@@ -1616,24 +1616,24 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       <div class="proj-row tpace-row">
         {% if g.tp_1h_total is not none %}
         <div class="proj-stat tpace">
-          <label>TP 1H Margin</label>
+          <label>T Pace 1H Margin</label>
           <span class="val {{ 'spread-home' if g.tp_1h_margin > 0 else 'spread-away' }}">
             {{ "Home" if g.tp_1h_margin > 0 else "Away" }} {{ "%.1f"|format(g.tp_1h_margin|abs) }}
           </span>
         </div>
         <div class="proj-stat tpace">
-          <label>TP 1H Total</label>
+          <label>T Pace 1H Total</label>
           <span class="val">{{ g.tp_1h_total }}</span>
         </div>
         {% endif %}
         <div class="proj-stat tpace">
-          <label>TP Margin</label>
+          <label>T Pace Margin</label>
           <span class="val {{ 'spread-home' if g.tp_margin > 0 else 'spread-away' }}">
             {{ "Home" if g.tp_margin > 0 else "Away" }} {{ "%.1f"|format(g.tp_margin|abs) }}
           </span>
         </div>
         <div class="proj-stat tpace">
-          <label>TP Total</label>
+          <label>T Pace Total</label>
           <span class="val">{{ g.tp_total }}</span>
         </div>
       </div>
@@ -1885,24 +1885,24 @@ LIVE_PARTIAL = r"""{% if games %}
     <div class="proj-row tpace-row">
       {% if g.tp_1h_total is not none %}
       <div class="proj-stat tpace">
-        <label>TP 1H Margin</label>
+        <label>T Pace 1H Margin</label>
         <span class="val {{ 'spread-home' if g.tp_1h_margin > 0 else 'spread-away' }}">
           {{ "Home" if g.tp_1h_margin > 0 else "Away" }} {{ "%.1f"|format(g.tp_1h_margin|abs) }}
         </span>
       </div>
       <div class="proj-stat tpace">
-        <label>TP 1H Total</label>
+        <label>T Pace 1H Total</label>
         <span class="val">{{ g.tp_1h_total }}</span>
       </div>
       {% endif %}
       <div class="proj-stat tpace">
-        <label>TP Margin</label>
+        <label>T Pace Margin</label>
         <span class="val {{ 'spread-home' if g.tp_margin > 0 else 'spread-away' }}">
           {{ "Home" if g.tp_margin > 0 else "Away" }} {{ "%.1f"|format(g.tp_margin|abs) }}
         </span>
       </div>
       <div class="proj-stat tpace">
-        <label>TP Total</label>
+        <label>T Pace Total</label>
         <span class="val">{{ g.tp_total }}</span>
       </div>
     </div>
