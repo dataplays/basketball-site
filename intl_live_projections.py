@@ -79,6 +79,30 @@ LEAGUES: dict[str, dict] = {
         "has_pbp": False,
         "accent": "#fdcb6e",
     },
+    "nba-summer-las-vegas": {
+        "name": "NBA Summer League (Las Vegas)",
+        "short": "Vegas SL",
+        "emoji": "☀️",
+        "reg_min": 40.0,     # Summer League: 4 x 10-min quarters
+        "qtr_min": 10.0,
+        "ot_min": 2.0,       # SL overtime is 2 minutes
+        "hca": 0.0,          # single neutral venue -> no home edge
+        "has_pbp": False,
+        "accent": "#f4a261",
+        "self_rate": True,   # no ESPN Core-API records -> compute PPG/OPPG from finals
+    },
+    "nba-summer-utah": {
+        "name": "NBA Summer League (Salt Lake City)",
+        "short": "Utah SL",
+        "emoji": "☀️",
+        "reg_min": 40.0,
+        "qtr_min": 10.0,
+        "ot_min": 2.0,
+        "hca": 0.0,
+        "has_pbp": False,
+        "accent": "#e9c46a",
+        "self_rate": True,
+    },
 }
 
 # Eurobasket-powered leagues (ratings only — no live scores from ESPN)
@@ -393,11 +417,57 @@ def fetch_team_record(slug: str, team_id: str) -> dict | None:
 
 
 
+def compute_summer_ratings(slug: str) -> dict[str, dict]:
+    """Self-compute PPG/OPPG/pace for a Summer League from its OWN completed
+    games -- ESPN has no Core-API records for summer rosters. Scans the event
+    window (~4 weeks back) in 7-day chunks (a wide single range can 504) and
+    aggregates finals. Teams with no games yet are simply absent, so project_game
+    falls back to the league average -> early-event projections stay sane, then
+    sharpen as games are played."""
+    cfg = LEAGUES[slug]
+    reg_min = cfg.get("reg_min", 40.0)
+    base = (datetime.strptime(DATE_OVERRIDE, "%Y-%m-%d").date() if DATE_OVERRIDE
+            else datetime.now(ET).date())
+    print(f"  Loading {cfg['name']} ratings (self-computed from finals)...")
+    agg: dict[str, list] = {}
+    day = base - timedelta(days=27)
+    while day <= base:
+        end = min(day + timedelta(days=6), base)
+        rng = f"{day:%Y%m%d}-{end:%Y%m%d}"
+        try:
+            games = fetch_league_scoreboard(slug, rng)
+        except Exception:
+            games = []
+        for g in games:
+            if g["state"] != "post":
+                continue
+            for tm, pf, pa in ((g["away_name"], g["away_score"], g["home_score"]),
+                               (g["home_name"], g["home_score"], g["away_score"])):
+                r = agg.setdefault(tm, [0, 0, 0])
+                r[0] += pf
+                r[1] += pa
+                r[2] += 1
+        day = end + timedelta(days=1)
+    ratings: dict[str, dict] = {}
+    for name, (pf, pa, n) in agg.items():
+        if n < 1 or not name:
+            continue
+        ppg, oppg = pf / n, pa / n
+        raw = (ppg + oppg) / 2.0
+        pace = raw * (reg_min / 48.0) if reg_min != 48.0 else raw
+        ratings[name] = {"ppg": round(ppg, 1), "oppg": round(oppg, 1),
+                         "pace": round(pace, 1)}
+    print(f"    {cfg['short']}: rated {len(ratings)} teams from finals.")
+    return ratings
+
+
 def load_league_ratings(slug: str) -> dict[str, dict]:
     """
     Load ratings for a league from ESPN core API records.
     Returns {team_name: {"ppg": X, "oppg": X, "pace": X}}.
     """
+    if LEAGUES[slug].get("self_rate"):
+        return compute_summer_ratings(slug)
     print(f"  Loading ratings for {LEAGUES[slug]['name']}...")
     teams = fetch_league_teams(slug)
     if not teams:
