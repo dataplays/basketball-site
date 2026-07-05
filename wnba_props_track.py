@@ -171,16 +171,13 @@ def _stats(rows: list[dict]):
     return dict(w=w, l=l, p=p, v=v, units=units, wp=wp, roi=roi, dec=dec, bets=bets, z=z)
 
 
-def print_summary() -> None:
-    if not TRACKER.exists():
-        print("No tracker yet. Run without --summary to seed it.")
-        return
-    with open(TRACKER, "r", newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    if not rows:
-        print("Tracker is empty.")
-        return
+# The v2026-07-01 model overhaul went live Jul 1 2026 — picks for dates from then
+# on are new-model (older PDFs predate the rec-gate rework / model-version stamp).
+NEW_MODEL_SINCE = "20260701"
 
+
+def _summary_block(rows: list[dict], title: str) -> None:
+    """Print one 4-universe table for `rows` under `title` (no footer)."""
     def b(x):  # csv stores booleans as 'True'/'False'
         return str(x) == "True"
 
@@ -192,11 +189,11 @@ def print_summary() -> None:
         ("EV% > 25 (all tracked)", [r for r in rows if b(r["in_ev25"])]),
         ("EV% > 25 (real odds)", [r for r in real_rows if b(r["in_ev25"])]),
     ]
-    print()
     print("=" * 84)
-    print("  WNBA PROPS — CUMULATIVE PERFORMANCE TRACKER")
-    print(f"  {len(dates)} days tracked  ({dates[0][4:6]}/{dates[0][6:8]} – {dates[-1][4:6]}/{dates[-1][6:8]})"
-          f"  |  file: {TRACKER.name}")
+    print(f"  {title}")
+    if dates:
+        print(f"  {len(dates)} days  ({dates[0][4:6]}/{dates[0][6:8]} – {dates[-1][4:6]}/{dates[-1][6:8]})"
+              f"  |  file: {TRACKER.name}")
     print("=" * 84)
     print(f"  {'Universe':28} {'Bets':>5} {'W-L':>9} {'Win%':>6} {'Units':>8} {'ROI':>7} {'z':>6}")
     print("  " + "-" * 78)
@@ -206,6 +203,30 @@ def print_summary() -> None:
         print(f"  {label:28} {s['bets']:>5} {s['w']:>3}-{s['l']:<5} {s['wp']:>5.1f}% "
               f"{s['units']:>+8.2f} {s['roi']:>+6.1f}% {s['z']:>+6.2f}{sig}")
     print("  " + "-" * 78)
+
+
+def print_summary(since: str | None = None) -> None:
+    if not TRACKER.exists():
+        print("No tracker yet. Run without --summary to seed it.")
+        return
+    with open(TRACKER, "r", newline="", encoding="utf-8") as f:
+        allrows = list(csv.DictReader(f))
+    if not allrows:
+        print("Tracker is empty.")
+        return
+    print()
+    if since:
+        rows = [r for r in allrows if r["date"] >= since]
+        if not rows:
+            print(f"No tracked picks since {since[:4]}-{since[4:6]}-{since[6:8]}.")
+            return
+        _summary_block(rows, f"WNBA PROPS — SINCE {since[:4]}-{since[4:6]}-{since[6:8]}")
+    else:
+        _summary_block(allrows, "WNBA PROPS — CUMULATIVE (ALL MODELS)")
+        new_rows = [r for r in allrows if r["date"] >= NEW_MODEL_SINCE]
+        if new_rows:
+            print()
+            _summary_block(new_rows, "WNBA PROPS — NEW MODEL ONLY  (v2026-07-01, Jul 1 2026+)")
     print(f"  Break-even win% at -110 ≈ {BREAKEVEN:.1f}%.  z = std-devs above break-even on decisions;")
     print("  z >= 1.645 ≈ one-sided 95% confidence the edge is real (not just variance).")
     print("=" * 84)
@@ -216,6 +237,9 @@ def main():
     ap.add_argument("--date", type=str, default=None, help="Grade one date YYYY-MM-DD")
     ap.add_argument("--rebuild", action="store_true", help="Wipe and rebuild from all PDFs")
     ap.add_argument("--summary", action="store_true", help="Print cumulative summary only")
+    ap.add_argument("--new-model", action="store_true",
+                    help="Summary for just the new-model era (v2026-07-01, Jul 1 2026+)")
+    ap.add_argument("--since", type=str, default=None, help="Summary for dates >= YYYY-MM-DD")
     ap.add_argument("--dedupe", action="store_true", help="Collapse any duplicate rows (safety)")
     a = ap.parse_args()
 
@@ -225,8 +249,10 @@ def main():
         print_summary()
         return
 
-    if a.summary:
-        print_summary()
+    if a.summary or a.new_model or a.since:
+        since = (a.since.replace("-", "") if a.since
+                 else NEW_MODEL_SINCE if a.new_model else None)
+        print_summary(since=since)
         return
 
     if a.rebuild and TRACKER.exists():
