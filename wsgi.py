@@ -43,6 +43,7 @@ DASH_LABELS = {
     "wcbb": "Women's College (WCBB)",
     "nbl": "Australian NBL",
     "intl": "International",
+    "summer": "NBA Summer League",
     "big3": "BIG3 (3-on-3)",
 }
 # Signature accent per dashboard (matches each dashboard's own header colour),
@@ -54,6 +55,7 @@ DASH_COLORS = {
     "wcbb": "#e040a0",
     "nbl": "#fdcb6e",
     "intl": "#00b894",
+    "summer": "#f4a261",
     "big3": "#e8112d",
     "median": "#4fc3f7",
     "news": "#e8730c",

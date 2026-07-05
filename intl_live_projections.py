@@ -105,6 +105,11 @@ LEAGUES: dict[str, dict] = {
     },
 }
 
+# Summer League lives on its own /summer tab (summer_live_projections.py), not
+# on /intl. Its configs stay in LEAGUES above so the shared engine (project_game,
+# ratings, scoreboard fetch) works for both; only the DISPLAY is split by slug.
+SUMMER_SLUGS = {"nba-summer-las-vegas", "nba-summer-utah"}
+
 # Eurobasket-powered leagues (ratings only — no live scores from ESPN)
 # Format: key -> {name, short, emoji, accent, section_id, league_num, is_cup,
 #                 reg_min, qtr_min, ot_min, hca}
@@ -2708,13 +2713,22 @@ def _fetch_all_scoreboards_cached() -> tuple[list[dict], str | None]:
     return all_games, error
 
 
-def fetch_and_project() -> tuple[list[dict], list[dict], list[dict], str, str | None, list[tuple], int]:
-    """Fetch, project, attach fouls, split into live/upcoming/completed."""
+def fetch_and_project(only=None, exclude=None) -> tuple[list[dict], list[dict], list[dict], str, str | None, list[tuple], int]:
+    """Fetch, project, attach fouls, split into live/upcoming/completed.
+
+    `only`/`exclude` (sets of league_slug) scope which leagues are shown. The
+    underlying scoreboard fetch is shared/cached, so /intl (exclude=SUMMER_SLUGS)
+    and /summer (only=SUMMER_SLUGS) both read a single fetch.
+    """
     _, dt = get_date_str()
     date_display = dt.strftime("%A, %B ") + str(dt.day) + dt.strftime(", %Y")
 
     games, error = _fetch_all_scoreboards_cached()
     projected = [project_game(g) for g in games]
+    if only is not None:
+        projected = [g for g in projected if g["league_slug"] in only]
+    elif exclude:
+        projected = [g for g in projected if g["league_slug"] not in exclude]
 
     # Fetch fouls (play-by-play leagues) + box stats (all ESPN feeds) for live
     # games; box stats drive the "Actual" live-pace columns.
@@ -2817,7 +2831,7 @@ def _build_euro_league_display() -> list[dict]:
 def index():
     ensure_ratings_loading()
 
-    live, upcoming, completed, date_display, error, league_summary, league_count = fetch_and_project()
+    live, upcoming, completed, date_display, error, league_summary, league_count = fetch_and_project(exclude=SUMMER_SLUGS)
     euro_leagues = _build_euro_league_display()
 
     return _render_with_partials(
@@ -2831,7 +2845,7 @@ def index():
         league_summary=league_summary,
         league_count=league_count,
         leagues_checked=", ".join(
-            [LEAGUES[s]["name"] for s in LEAGUES] +
+            [LEAGUES[s]["name"] for s in LEAGUES if s not in SUMMER_SLUGS] +
             [EURO_LEAGUES[k]["name"] for k in EURO_LEAGUES]
         ),
         no_games_at_all=(len(live) + len(upcoming) + len(completed) == 0 and not euro_leagues),
@@ -2845,7 +2859,7 @@ def index():
 def api_games():
     ensure_ratings_loading()
 
-    live, upcoming, completed, _, error, _, _ = fetch_and_project()
+    live, upcoming, completed, _, error, _, _ = fetch_and_project(exclude=SUMMER_SLUGS)
 
     return jsonify({
         "live_html": render_template_string(LIVE_PARTIAL, games=live),
