@@ -154,6 +154,100 @@ def moneyline(spread: float, sigma: float) -> dict:
     }
 
 
+# ── Derivatives: team totals, period (1Q/1H/2H) lines, second-half pricer ──────
+#
+# Everything below is derived from the SAME entered full-game spread & total and
+# the SAME Normal model, so the derivative prices are internally consistent with
+# the full-game numbers above them.
+
+# Period splits. A period is a fraction f of the game; scoring & the favorite's
+# edge both accrue linearly with time, so period mean = f x full and period
+# variance = f x full variance (SD scales by sqrt(f)) -- i.e. two independent
+# halves each have SD = full_sd / sqrt(2). Men's CBB plays halves (no 1Q).
+PERIODS_QUARTER = [("1Q", 0.25), ("1H", 0.50), ("2H", 0.50)]
+PERIODS_HALF = [("1H", 0.50), ("2H", 0.50)]
+
+
+def team_total_sd(spread_sd: float, total_sd: float) -> float:
+    """SD of a single team's total. score = (total +/- margin)/2, so with total
+    and margin independent, Var(team) = (Var_total + Var_margin)/4."""
+    return sqrt(total_sd ** 2 + spread_sd ** 2) / 2.0
+
+
+def team_total_block(spread: float, total: float, spread_sd: float, total_sd: float) -> dict:
+    """Favorite & underdog projected team totals + alt-line ladders."""
+    st = team_total_sd(spread_sd, total_sd)
+    fav_mean = (total + spread) / 2.0            # favorite outscores by the spread
+    dog_mean = (total - spread) / 2.0
+    return {
+        "sd": st,
+        "fav_mean": fav_mean, "dog_mean": dog_mean,
+        "fav_rows": total_rows(fav_mean, st, span=4),
+        "dog_rows": total_rows(dog_mean, st, span=4),
+    }
+
+
+def period_lines(spread: float, total: float, spread_sd: float,
+                 total_sd: float, halves: bool = False) -> list:
+    """Derived spread, total & moneyline for each period (1Q/1H/2H)."""
+    out = []
+    for name, f in (PERIODS_HALF if halves else PERIODS_QUARTER):
+        ps, pt = spread * f, total * f
+        pss, pts = spread_sd * sqrt(f), total_sd * sqrt(f)
+        ps_line, pt_line = round_half(ps), round_half(pt)
+        sp = two_way(ps, pss, ps_line)
+        tt = two_way(pt, pts, pt_line)
+        ml = moneyline(ps, pss)
+        out.append({
+            "name": name,
+            "fav_line": fav_label(ps_line), "dog_line": dog_label(ps_line),
+            "odds_fav": sp["odds_over"], "odds_dog": sp["odds_under"],
+            "ml_fav": ml["ml_fav"], "ml_dog": ml["ml_dog"],
+            "total_line": pt_line,
+            "odds_over": tt["odds_over"], "odds_under": tt["odds_under"],
+        })
+    return out
+
+
+def second_half_block(spread: float, total: float, spread_sd: float, total_sd: float,
+                      fav_ht, dog_ht) -> tuple:
+    """Second-half fair line, plus (if a halftime score is given) the live
+    full-game line implied by that score + the pregame second-half expectation.
+
+    The 2H expectation is 0.5 x the pregame full-game line (both halves were
+    expected to split evenly) -- it does NOT re-estimate team strength from how
+    the 1st half actually went. So this is the *fair* 2H if you still trust the
+    pregame number; a sharp live 2H would adjust for the 1H.
+    """
+    f = 0.50
+    s2, t2 = spread * f, total * f
+    ss2, ts2 = spread_sd * sqrt(f), total_sd * sqrt(f)
+    two_h = {
+        "spread": s2, "total": t2,
+        "fav_line": fav_label(round_half(s2)), "dog_line": dog_label(round_half(s2)),
+        "total_line": round_half(t2),
+        "sp": two_way(s2, ss2, round_half(s2)),
+        "tt": two_way(t2, ts2, round_half(t2)),
+        "ml": moneyline(s2, ss2),
+    }
+    live = None
+    if fav_ht is not None and dog_ht is not None:
+        m = (fav_ht - dog_ht) + s2               # projected final margin (fav - dog)
+        tp = (fav_ht + dog_ht) + t2              # projected final total
+        live = {
+            "margin": m, "total": tp,
+            "fav_ht": fav_ht, "dog_ht": dog_ht,
+            "fav_line": fav_label(round_half(m)), "dog_line": dog_label(round_half(m)),
+            "total_line": round_half(tp),
+            "sp": two_way(m, ss2, round_half(m)),
+            "tt": two_way(tp, ts2, round_half(tp)),
+            "ml": moneyline(m, ss2),
+            "fav_final": fav_ht + (t2 + s2) / 2.0,
+            "dog_final": dog_ht + (t2 - s2) / 2.0,
+        }
+    return two_h, live
+
+
 TEMPLATE = """
 <!doctype html>
 <html lang="en">
@@ -243,6 +337,16 @@ TEMPLATE = """
           <input type="number" step="0.1" name="total_sd" id="total_sd"
                  value="{{ total_sd_input }}" placeholder="{{ '%.1f' % total_sd }}">
         </div>
+        <div>
+          <label for="fav_ht">Fav pts @ half (opt)</label>
+          <input type="number" step="1" name="fav_ht" id="fav_ht" value="{{ fav_ht_input }}"
+                 placeholder="2H pricer">
+        </div>
+        <div>
+          <label for="dog_ht">Dog pts @ half (opt)</label>
+          <input type="number" step="1" name="dog_ht" id="dog_ht" value="{{ dog_ht_input }}"
+                 placeholder="2H pricer">
+        </div>
         <button type="submit">Calculate</button>
         <div class="check" style="grid-column:1 / -1; margin-top:2px;">
           <input type="checkbox" name="scale_sd" id="scale_sd" value="on" {% if scale_sd %}checked{% endif %}>
@@ -315,6 +419,107 @@ TEMPLATE = """
       </div>
     </div>
 
+    <div class="panel">
+      <h2>Team Totals <small>&mdash; derived from the spread &amp; total</small></h2>
+      <div class="cols">
+        <div>
+          <div class="stat-label">Favorite &mdash; projected {{ '%.1f' % tt.fav_mean }}</div>
+          <table>
+            <thead><tr><th>Line</th><th>Over</th><th>Odds</th><th>Under</th><th>Odds</th></tr></thead>
+            <tbody>
+              {% for r in tt.fav_rows %}
+              <tr class="{% if r.is_current %}current-row{% endif %}">
+                <td>{{ fmt(r.line) }}</td>
+                <td class="over">{{ '%.1f' % r.p_over }}%</td><td class="over">{{ r.odds_over }}</td>
+                <td class="under">{{ '%.1f' % r.p_under }}%</td><td class="under">{{ r.odds_under }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <div class="stat-label">Underdog &mdash; projected {{ '%.1f' % tt.dog_mean }}</div>
+          <table>
+            <thead><tr><th>Line</th><th>Over</th><th>Odds</th><th>Under</th><th>Odds</th></tr></thead>
+            <tbody>
+              {% for r in tt.dog_rows %}
+              <tr class="{% if r.is_current %}current-row{% endif %}">
+                <td>{{ fmt(r.line) }}</td>
+                <td class="over">{{ '%.1f' % r.p_over }}%</td><td class="over">{{ r.odds_over }}</td>
+                <td class="under">{{ '%.1f' % r.p_under }}%</td><td class="under">{{ r.odds_under }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="note">Team total = (total &plusmn; spread) / 2. Team-total SD {{ '%.1f' % tt.sd }} = &radic;(totalSD&sup2; + spreadSD&sup2;) / 2. The starred row is the projected team total.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Period Lines <small>&mdash; {{ '1H / 2H' if halves else '1Q / 1H / 2H' }} derived from the full game</small></h2>
+      <table>
+        <thead><tr>
+          <th>Period</th><th>Spread</th><th>Fair (Fav / Dog)</th>
+          <th>Moneyline (Fav / Dog)</th><th>Total</th><th>O/U Fair</th>
+        </tr></thead>
+        <tbody>
+          {% for p in periods %}
+          <tr>
+            <td>{{ p.name }}</td>
+            <td>Fav {{ p.fav_line }}</td>
+            <td>{{ p.odds_fav }} / {{ p.odds_dog }}</td>
+            <td class="ml">{{ p.ml_fav }} / {{ p.ml_dog }}</td>
+            <td>{{ fmt(p.total_line) }}</td>
+            <td>{{ p.odds_over }} / {{ p.odds_under }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <div class="note">Each period is a fraction of the game (1Q = &frac14;, 1H/2H = &frac12;): mean = fraction &times; full line, SD = full&nbsp;SD &times; &radic;fraction. Fair odds are shown at each period's own line (&asymp; even by construction).</div>
+    </div>
+
+    <div class="panel">
+      <h2>Second Half &amp; Live <small>&mdash; halftime pricer</small></h2>
+      <table>
+        <thead><tr>
+          <th></th><th>Spread</th><th>Fair (Fav / Dog)</th>
+          <th>Moneyline (Fav / Dog)</th><th>Total</th><th>O/U Fair</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td>2nd Half</td>
+            <td>Fav {{ two_h.fav_line }}</td>
+            <td>{{ two_h.sp.odds_over }} / {{ two_h.sp.odds_under }}</td>
+            <td class="ml">{{ two_h.ml.ml_fav }} / {{ two_h.ml.ml_dog }}</td>
+            <td>{{ fmt(two_h.total_line) }}</td>
+            <td>{{ two_h.tt.odds_over }} / {{ two_h.tt.odds_under }}</td>
+          </tr>
+          {% if live %}
+          <tr class="current-row">
+            <td>Live full game</td>
+            <td>Fav {{ live.fav_line }}</td>
+            <td>{{ live.sp.odds_over }} / {{ live.sp.odds_under }}</td>
+            <td class="ml">{{ live.ml.ml_fav }} / {{ live.ml.ml_dog }}</td>
+            <td>{{ fmt(live.total_line) }}</td>
+            <td>{{ live.tt.odds_over }} / {{ live.tt.odds_under }}</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+      {% if live %}
+      <div class="note">From halftime score <b>Fav {{ fmt(live.fav_ht) }}&ndash;{{ fmt(live.dog_ht) }} Dog</b>:
+        projected final <b>Fav {{ '%.1f' % live.fav_final }}&ndash;{{ '%.1f' % live.dog_final }} Dog</b>,
+        live win prob <b>Fav {{ '%.1f' % live.ml.p_fav }}% / Dog {{ '%.1f' % live.ml.p_dog }}%</b>.
+        The 2H line is &frac12; the pregame full-game number &mdash; it does <b>not</b> re-estimate team
+        strength from the 1st half, so it's the fair 2H only if you still trust the pregame line.</div>
+      {% else %}
+      <div class="note">Enter each team's <b>halftime points</b> in the form above to also get the
+        <b>live full-game</b> line &mdash; projected final score, spread, total &amp; moneyline &mdash;
+        implied by that halftime score plus the pregame second-half expectation.</div>
+      {% endif %}
+    </div>
+
     <div class="panel note">
       <b>Model.</b> Margin (favorite&minus;underdog) &sim; Normal(mean = spread, SD = Spread&nbsp;SD); total points &sim; Normal(mean = total, SD = Total&nbsp;SD). The current spread/total price at exactly 50% by construction. Moneyline = P(margin &gt; 0).
       <br><b>Total-aware SD</b> (checkbox, on by default): both SDs are multiplied by &radic;(total / league&nbsp;avg), so a high-total game widens the spread distribution and a low-total game tightens it — the spread lines DO react to this game's total. Uncheck for flat league SDs. A typed SD overrides everything (used flat).
@@ -326,6 +531,17 @@ TEMPLATE = """
 </body>
 </html>
 """
+
+
+def _parse_opt(field):
+    """Parse an optional numeric form field; return float or None if blank/bad."""
+    raw = request.values.get(field, "").strip()
+    if raw == "":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        return None
 
 
 def _resolve_sd(field, base, scale, total, avg_total):
@@ -372,6 +588,11 @@ def index():
     total_sd, total_sd_input, total_sd_tag = _resolve_sd(
         "total_sd", preset["total_sd"], scale_sd, total, preset["avg_total"])
 
+    # Optional halftime score for the 2H / live pricer (blank -> not shown).
+    fav_ht = _parse_opt("fav_ht")
+    dog_ht = _parse_opt("dog_ht")
+    two_h, live = second_half_block(spread, total, spread_sd, total_sd, fav_ht, dog_ht)
+
     return render_template_string(
         TEMPLATE,
         leagues=LEAGUES, league=league, fmt=fmt,
@@ -380,9 +601,15 @@ def index():
         spread_sd=spread_sd, total_sd=total_sd,
         spread_sd_input=spread_sd_input, total_sd_input=total_sd_input,
         spread_sd_tag=spread_sd_tag, total_sd_tag=total_sd_tag,
+        fav_ht_input=(fmt(fav_ht) if fav_ht is not None else ""),
+        dog_ht_input=(fmt(dog_ht) if dog_ht is not None else ""),
         ml=moneyline(spread, spread_sd),
         spreads=spread_rows(spread, spread_sd),
         totals=total_rows(total, total_sd),
+        tt=team_total_block(spread, total, spread_sd, total_sd),
+        periods=period_lines(spread, total, spread_sd, total_sd, halves=(league == "cbb")),
+        halves=(league == "cbb"),
+        two_h=two_h, live=live,
     )
 
 
