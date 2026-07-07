@@ -68,6 +68,7 @@ DASH_COLORS = {
     "hitrate": "#26a69a",
     "refs": "#ef5350",
     "wins": "#66bb6a",
+    "edges": "#22c55e",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -98,6 +99,7 @@ LANDING_TOOLS = {
     "hitrate": "Player prop hit rates — L5/L10/L20, home/away, vs opp",
     "refs": "NBA referee tendencies + tonight's crews",
     "wins": "WNBA season win totals — projected final records",
+    "edges": "Model vs market — ranked edges across every league",
 }
 
 
@@ -144,6 +146,7 @@ EXTRA_DASHBOARDS = {
     "prop_hitrate": ("hitrate", "Prop Hit-Rate"),
     "referee_tendencies": ("refs", "Referee Tendencies"),
     "wnba_win_projections": ("wins", "WNBA Win Totals"),
+    "edges_dashboard": ("edges", "Today's Edges"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
