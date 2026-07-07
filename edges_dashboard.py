@@ -131,8 +131,18 @@ def _row_for(game: dict, prefix: str, label: str, color: str, line: dict) -> dic
     proj_spread_disp = (
         f'{home_ab} {-proj_spread:+.1f}' if proj_spread is not None else "—"
     )
+    # Stable id + the game's own date (may be tomorrow within the 48h window),
+    # so a grader can look up the final score later.
+    epoch = game.get("start_epoch")
+    if epoch and ET is not None:
+        game_date = datetime.fromtimestamp(epoch, ET).date().isoformat()
+    else:
+        game_date = DATE_OVERRIDE or (
+            datetime.now(ET).date().isoformat() if ET is not None
+            else datetime.now().date().isoformat())
     return {
         "prefix": prefix, "league": label, "color": color,
+        "game_id": game.get("game_id", ""), "game_date": game_date,
         "state": state, "status": status, "score": score,
         "away": away_ab, "home": home_ab,
         "away_name": game.get("away_name", ""), "home_name": game.get("home_name", ""),
