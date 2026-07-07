@@ -62,20 +62,32 @@ WIN_BY = 2                 # ... and must lead by 2 (no overtime)
 HALF_SCORE = 25            # halftime triggers when a team reaches 25 (cumulative)
 WINDOW_HOURS = 48          # "upcoming" = any game tipping within this rolling window
 
-# Average points per possession in the BIG3 (tuned in --selftest so that an
-# even matchup yields a realistic ~50-43 final and ~90-ish total).
+# Average points per possession in the BIG3 (tuned so that an even matchup
+# yields a realistic ~51-42 final / ~93 total under the game-flow model).
 LEAGUE_PPP = 1.16
 
-# Empirical margin calibration. An independent-possession race overstates the
-# final margin (~10-11) vs ACTUAL BIG3 finals (~8; n=8 over 2025-26) because real
-# games compress — the trailing team rallies / the leader coasts to 50, a dynamic
-# an i.i.d. race can't produce (confirmed: margin is invariant to LEAGUE_PPP and
-# floors at ~9 even with zero scoring variance). So scale the projected winning
-# GAP toward the empirical level, keeping the winner at the race-ending ~50 and
-# lifting the loser: even games then read ~51-43 / total ~94 / margin ~8 (matches
-# the sample). NOTE: a level correction tuned to a SMALL sample — not per-game
-# variety (that needs a comeback term + more games). Set to 1.0 to disable.
-MARGIN_CAL = 0.75
+# Game-flow model (v2, Jul 7 2026) — replaces the old flat MARGIN_CAL=0.75
+# compression, which squeezed every matchup to the same ~51-43 / 94 line.
+# Calibrated on the 12 real 2025-26 finals (margins 2..17 avg 8.3, totals
+# 83..100 avg 92.6, winner ~50.7): competitive games finish tight with HIGH
+# totals, mismatches break open with LOW totals. Three mechanisms:
+#   1. Competitive rubber band on the gap BEYOND the expected trajectory
+#      (RUBBER_BAND / RUBBER_DEPTH): luck-driven runs get pulled back, so even
+#      matchups finish close — but a true strength gap is expected and is NOT
+#      subsidized away.
+#   2. Breaking point on the raw scoreboard (BREAK_PTS / BLOWOUT_FLOW): once a
+#      team is down big it capitulates and the rout inflates — the fat tail
+#      real blowouts show (e.g. LA's 50-33).
+#   3. Per-game form/uncertainty wobble (FORM_SD): each sim draws a game-day
+#      strength for both teams. Keeps win% honest given few games of ratings
+#      signal (a top-vs-bottom matchup tops out ~85%, not ~99%).
+# Result: margins/totals now RESPOND to the matchup — even ~51-42 / t93,
+# top-vs-bottom ~51-38 / t89 — while the winner stays at the race-ending ~51.
+RUBBER_BAND = 0.45      # competitive-band strength (0 = pure i.i.d. race)
+RUBBER_DEPTH = 8.0      # pts beyond expectation at which the band saturates
+BREAK_PTS = 14          # scoreboard deficit where a team "breaks"
+BLOWOUT_FLOW = 0.12     # scoring-rate swing once broken (leader +, trailer -)
+FORM_SD = 0.12          # sd of the per-game team strength multiplier
 
 # Distribution of points scored *when a possession results in a score*.
 # Reflects BIG3's 2/3/4-pt shots plus the occasional single bonus free throw.
@@ -136,14 +148,16 @@ def _adjusted_ppp(off_rtg, def_rtg, home_mult=1.0):
 
 def simulate(score_a, score_b, ppp_a, ppp_b, sims=DEFAULT_SIMS, seed=None):
     """
-    Simulate the remainder of a BIG3 game as a race to 50 (win by 2).
+    Simulate the remainder of a BIG3 game as a race to 50 (win by 2), with
+    game-flow dynamics (competitive rubber band, breaking point, per-game
+    form wobble — see the constants block above).
 
     a == home, b == away (by our convention). Scores are cumulative and may
     already be non-zero for a live game. Returns a dict of projections.
     """
-    rnd = random.Random(seed).random
-    ps_a = _score_prob(ppp_a)
-    ps_b = _score_prob(ppp_b)
+    rng = random.Random(seed)
+    rnd = rng.random
+    gauss = rng.gauss
 
     already_half = (score_a >= HALF_SCORE or score_b >= HALF_SCORE)
 
@@ -156,21 +170,45 @@ def simulate(score_a, score_b, ppp_a, ppp_b, sims=DEFAULT_SIMS, seed=None):
     h1_sum_lose = 0.0
 
     for _ in range(sims):
+        # Game-day form / ratings-uncertainty wobble (one draw per team per game)
+        fa = ppp_a * max(0.6, 1.0 + gauss(0.0, FORM_SD))
+        fb = ppp_b * max(0.6, 1.0 + gauss(0.0, FORM_SD))
+        base_a = fa / MEAN_VALUE
+        base_b = fb / MEAN_VALUE
         a, b = score_a, score_b
+        ea, eb = float(a), float(b)     # expected-points trajectories
         rec_half = already_half
         ha = hb = None
         turn_a = rnd() < 0.5   # unknown who has the ball live -> randomize
         guard = 0
         while not ((a >= TARGET_SCORE or b >= TARGET_SCORE) and abs(a - b) >= WIN_BY):
             if turn_a:
-                a += _draw(ps_a, rnd)
+                d = a - b
+                if d >= BREAK_PTS:          # rout: broken opponent
+                    f = BLOWOUT_FLOW
+                elif d <= -BREAK_PTS:       # broken: scoring dries up
+                    f = -BLOWOUT_FLOW
+                else:                       # competitive: revert luck, not talent
+                    excess = d - (ea - eb)
+                    f = -RUBBER_BAND * max(-1.0, min(1.0, excess / RUBBER_DEPTH))
+                a += _draw(max(0.05, min(0.95, base_a * (1.0 + f))), rnd)
+                ea += fa
             else:
-                b += _draw(ps_b, rnd)
+                d = b - a
+                if d >= BREAK_PTS:
+                    f = BLOWOUT_FLOW
+                elif d <= -BREAK_PTS:
+                    f = -BLOWOUT_FLOW
+                else:
+                    excess = d - (eb - ea)
+                    f = -RUBBER_BAND * max(-1.0, min(1.0, excess / RUBBER_DEPTH))
+                b += _draw(max(0.05, min(0.95, base_b * (1.0 + f))), rnd)
+                eb += fb
             turn_a = not turn_a
             if not rec_half and (a >= HALF_SCORE or b >= HALF_SCORE):
                 ha, hb, rec_half = a, b, True
             guard += 1
-            if guard > 800:    # numerical safety; should never trigger
+            if guard > 1200:   # numerical safety; should never trigger
                 break
 
         if a > b:
@@ -194,15 +232,14 @@ def simulate(score_a, score_b, ppp_a, ppp_b, sims=DEFAULT_SIMS, seed=None):
     mean_win = sum_win / sims          # winner ~50-51 (race-to-50 floor)
     mean_lose = sum_lose / sims
     # BIG3 ends only when a team reaches 50 (by >=2), so the projected winner is
-    # shown at the race-ending ~50. The raw i.i.d. gap (~10-11) overstates real
-    # margins (~8), so compress it by MARGIN_CAL toward the empirical level while
-    # keeping the winner at ~50 and lifting the loser (-> ~51-43 / total ~94 /
-    # margin ~8 for an even game). Spread & total are derived FROM this final so
-    # the three always agree; the spread is the projected WINNING margin and win%
-    # is the separate likelihood (a near-even game can show ~8 margin at ~50% — the
-    # win% bar carries the real closeness).
-    cal_gap = (mean_win - mean_lose) * MARGIN_CAL
-    win_score, lose_score = mean_win, mean_win - cal_gap
+    # shown at the race-ending ~51. The game-flow dynamics (rubber band /
+    # breaking point / form wobble) are calibrated on real finals, so the raw
+    # sim gap is used directly — no post-hoc compression. Spread & total derive
+    # FROM this final so the three always agree; the spread is the projected
+    # WINNING margin (now matchup-responsive: ~9 even, ~13+ top-vs-bottom) and
+    # win% is the separate likelihood (a near-even game still shows a ~9-pt
+    # winning margin at ~50% — the win% bar carries the real closeness).
+    win_score, lose_score = mean_win, mean_lose
     if p_a >= 50.0:
         proj_home, proj_away = int(round(win_score)), int(round(lose_score))
     else:
@@ -219,10 +256,8 @@ def simulate(score_a, score_b, ppp_a, ppp_b, sims=DEFAULT_SIMS, seed=None):
         "half_actual": already_half,
     }
     if h1_n:                                            # projected first half
-        h1_win = h1_sum_win / h1_n                       # team first to 25 (~25)
-        h1_lose = h1_sum_lose / h1_n
-        h1_gap = (h1_win - h1_lose) * MARGIN_CAL         # same compression at the half
-        h1w, h1l = h1_win, h1_win - h1_gap
+        h1w = h1_sum_win / h1_n                          # team first to 25 (~25)
+        h1l = h1_sum_lose / h1_n
         p_h1_home = 100.0 * h1_home_first / h1_n
         if p_h1_home >= 50.0:
             out["h1_home"], out["h1_away"] = int(round(h1w)), int(round(h1l))
@@ -263,8 +298,10 @@ def project_game(game, ratings, sims=DEFAULT_SIMS):
         return game
 
     # Cache by game state so repeated 30s polls don't re-run the Monte Carlo
-    # when nothing has changed (ratings are static for the process lifetime).
-    ckey = (home["key"], away["key"], sh, sa, game["status"], sims)
+    # when nothing has changed. The matchup ppps are part of the key so a
+    # ratings update (new finals landing) invalidates stale projections.
+    ckey = (home["key"], away["key"], sh, sa, game["status"], sims,
+            round(ppp_home, 4), round(ppp_away, 4))
     cached = _PROJ_CACHE.get(ckey)
     if cached is not None:
         game["proj"] = cached
@@ -563,22 +600,24 @@ def _write_ratings_template(games):
         print(f"[ratings] could not write template: {e}", file=sys.stderr)
 
 
-def _clamp_rating(x, lo=0.82, hi=1.20):
+def _clamp_rating(x, lo=0.80, hi=1.25):
     return max(lo, min(hi, x))
 
 
-def compute_ratings_from_games(games, shrink_k=4.0):
-    """Derive per-team off/def multipliers from COMPLETED games.
+def compute_ratings_from_games(games, shrink_k=3.0, iters=4):
+    """Derive OPPONENT-ADJUSTED per-team off/def multipliers from COMPLETED games.
 
-    A team's offense = its points scored vs the league per-game average; its
-    defense = points it allowed vs that average (def multiplies the opponent's
-    offense in project_game, so >1 = leaky, <1 = stingy). Ratings are shrunk
-    toward 1.0 by games played: with BIG3's tiny samples -- and race-to-50 scores
-    that pin winners near 50 -- one result should only nudge the line, not swing
-    it. factor = n/(n+K): 1 game -> 20%, 4 -> 50%, 8 -> 67%. Returns
-    {team_key: {"off":.., "def":..}} for teams that have played.
+    A team's offense = its points scored vs the league per-game average,
+    discounted by the opponent's defense; its defense = points allowed vs that
+    average, discounted by the opponent's offense (def multiplies the opponent's
+    offense in project_game, so >1 = leaky, <1 = stingy). Iterated a few times
+    so an 0-3 team that only faced the top of the league isn't over-punished —
+    with 8 teams and ~3 games each, schedule imbalance is real signal.
+    Ratings are shrunk toward 1.0 by games played (factor = n/(n+K): 2 games ->
+    40%, 3 -> 50%, 6 -> 67%) and the league means are renormalized to 1.0.
+    Returns {team_key: {"off":.., "def":..}} for teams that have played.
     """
-    pf, pa, n, pts = {}, {}, {}, []
+    rows, n, pts = [], {}, []
     for g in games:
         if g.get("status") != "final":
             continue
@@ -588,26 +627,38 @@ def compute_ratings_from_games(games, shrink_k=4.0):
             continue
         if _is_incomplete_final(g):     # suspended/abandoned (winner < 50): its
             continue                    # low score isn't a real result, skip it
-        for k, sf, sag in ((h["key"], hs, as_), (a["key"], as_, hs)):
-            pf[k] = pf.get(k, 0.0) + sf
-            pa[k] = pa.get(k, 0.0) + sag
-            n[k] = n.get(k, 0) + 1
+        rows.append((h["key"], a["key"], hs, as_))
+        rows.append((a["key"], h["key"], as_, hs))
+        n[h["key"]] = n.get(h["key"], 0) + 1
+        n[a["key"]] = n.get(a["key"], 0) + 1
         pts += [hs, as_]
     if not pts:
         return {}
     league_avg = sum(pts) / len(pts)
     if league_avg <= 0:
         return {}
-    out = {}
-    for k, gp in n.items():
-        raw_off = (pf[k] / gp) / league_avg
-        raw_def = (pa[k] / gp) / league_avg
-        f = gp / (gp + shrink_k)
-        out[k] = {
-            "off": round(_clamp_rating(1.0 + f * (raw_off - 1.0)), 4),
-            "def": round(_clamp_rating(1.0 + f * (raw_def - 1.0)), 4),
-        }
-    return out
+    r = {k: {"off": 1.0, "def": 1.0} for k in n}
+    for _ in range(iters):
+        acc_off = {k: 0.0 for k in n}
+        acc_def = {k: 0.0 for k in n}
+        for team, opp, sf, sag in rows:
+            acc_off[team] += (sf / league_avg) / max(0.5, r[opp]["def"])
+            acc_def[team] += (sag / league_avg) / max(0.5, r[opp]["off"])
+        new = {}
+        for k, gp in n.items():
+            f = gp / (gp + shrink_k)
+            new[k] = {
+                "off": _clamp_rating(1.0 + f * (acc_off[k] / gp - 1.0)),
+                "def": _clamp_rating(1.0 + f * (acc_def[k] / gp - 1.0)),
+            }
+        mo = sum(v["off"] for v in new.values()) / len(new)
+        md = sum(v["def"] for v in new.values()) / len(new)
+        for v in new.values():
+            v["off"] /= mo
+            v["def"] /= md
+        r = new
+    return {k: {"off": round(v["off"], 4), "def": round(v["def"], 4)}
+            for k, v in r.items()}
 
 
 def _persist_ratings(ratings, games):
@@ -903,12 +954,14 @@ PAGE_HTML = r"""<!DOCTYPE html>
   <div id="fin-sec"></div>
   <div class="foot">
     Model: Monte-Carlo race-to-target simulation honoring BIG3 scoring limits
-    (first to 50 win-by-2, halftime at 25, cumulative 2/3/4-pt scoring).
+    (first to 50 win-by-2, halftime at 25, cumulative 2/3/4-pt scoring), with
+    game-flow dynamics calibrated on actual BIG3 finals — close matchups finish
+    tight with high totals, mismatches break open with low totals.
     Win % &amp; projected finals come from <span id="nsim"></span> simulated games per matchup.
     <b>Read the win % and total first</b> — in a race to 50 the winner is always ~51, so the
-    scoreline only varies by margin. Margins are <b>calibrated</b> to recent BIG3 results
-    (~51-43 / total ~94 / margin ~8 for an even game); with only a handful of games played,
-    matchup differentiation is still thin, so treat the exact scoreline as a low-confidence estimate.
+    scoreline varies by margin: ~51-42 / total ~93 for an even matchup down to ~51-38 /
+    total ~89 for the league's widest gap. Team strength is opponent-adjusted from this
+    season's completed games and sharpens weekly.
     Data: big3.com feed · Auto-refreshes every 30s.
   </div>
 </div>
@@ -1055,7 +1108,8 @@ def run_selftest():
         ("Even matchup, tip-off (0-0)", 0, 0, 1.0, 1.0),
         ("Even, home up 30-20 (2nd half)", 30, 20, 1.0, 1.0),
         ("Even, away up 24-12 (late 1st)", 12, 24, 1.0, 1.0),
-        ("Home strong off (1.12) vs avg", 0, 0, 1.12, 1.0),
+        ("Mid gap (home +5%/-5%)", 0, 0, 1.05, 0.95),
+        ("Top-vs-bottom (~1.24 ppp ratio)", 0, 0, 1.10, 0.89),
         ("Home up 48-45, win-by-2 race", 48, 45, 1.0, 1.0),
         ("Away up 25-19 at half", 19, 25, 1.0, 1.0),
     ]
@@ -1072,8 +1126,9 @@ def run_selftest():
         print(f"  win%   H {r['p_home']:.1f}  /  A {r['p_away']:.1f}")
         print(f"  final  H {r['proj_home']} - {r['proj_away']} A  "
               f"(spread {r['spread']:+.1f}, total {r['total']}){h1}")
-    print("\nSanity targets: even 0-0 -> ~50/50, winner ~50, total ~88-94, "
-          "leader in a race should carry a clear win%.")
+    print("\nSanity targets: even 0-0 -> ~50/50, winner ~51, margin ~9 / total ~93;"
+          "\nmid gap -> ~70%, margin ~10; top-vs-bottom -> ~85%, margin ~13 / total ~89;"
+          "\na leader in a live race should carry a clear win%.")
 
 
 def run_once(date_override=None):

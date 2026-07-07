@@ -1,9 +1,9 @@
 team_id,team,off_rating,def_rating
-35418,Boston Ball Hogs,1.00,1.00
-40994,Chicago Triplets,1.00,1.00
-35434,DMV Trilogy,1.00,1.00
-35435,Dallas Power,1.00,1.00
-45110,Detroit Amps,1.00,1.00
-45109,Houston Rig Hands,1.00,1.00
-45108,Los Angeles Riot,1.00,1.00
-45107,Miami 305,1.00,1.00
+35418,Boston Ball Hogs,1.0180,0.9707
+40994,Chicago Triplets,1.0461,0.9924
+35434,DMV Trilogy,1.0296,0.9871
+35435,Dallas Power,1.0433,0.9537
+45110,Detroit Amps,1.0099,1.0440
+45109,Houston Rig Hands,0.9448,1.0329
+45108,Los Angeles Riot,0.9298,1.0216
+45107,Miami 305,0.9784,0.9975
