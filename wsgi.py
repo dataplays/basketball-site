@@ -70,6 +70,7 @@ DASH_COLORS = {
     "wins": "#66bb6a",
     "edges": "#22c55e",
     "vacuum": "#5c6bc0",
+    "sgp": "#f06292",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -102,6 +103,7 @@ LANDING_TOOLS = {
     "wins": "WNBA season win totals — projected final records",
     "edges": "Model vs market — ranked edges across every league",
     "vacuum": "Usage vacuum — who eats a sat player's minutes & usage",
+    "sgp": "SGP / parlay EV — correlation-priced same-game parlays",
 }
 
 
@@ -150,6 +152,7 @@ EXTRA_DASHBOARDS = {
     "wnba_win_projections": ("wins", "WNBA Win Totals"),
     "edges_dashboard": ("edges", "Today's Edges"),
     "usage_vacuum": ("vacuum", "Usage Vacuum"),
+    "sgp_parlay_ev": ("sgp", "SGP / Parlay EV"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
