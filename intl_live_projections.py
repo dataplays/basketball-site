@@ -2551,9 +2551,9 @@ LIVE_PARTIAL = r"""{% if games %}
     </div>
     {% endif %}
     <div class="detail-row">
-      <span>{{ g.away_abbrev }}: PPG {{ g.away_ppg }} <span class="pct-badge {{ g.away_ppg_cls }}">{{ g.away_ppg_pct }}%</span> | OPPG {{ g.away_oppg }} <span class="pct-badge {{ g.away_oppg_cls }}">{{ g.away_oppg_pct }}%</span>{{ "" if g.has_away_data else " &#9888;" }}</span>
+      <span>{{ g.away_abbrev }}: PPG {{ g.away_ppg }} <span class="pct-badge {{ g.away_ppg_cls }}">{{ g.away_ppg_pct }}%</span> | OPPG {{ g.away_oppg }} <span class="pct-badge {{ g.away_oppg_cls }}">{{ g.away_oppg_pct }}%</span></span>
       <span>G.Pace: {{ g.game_pace }} | Rem: {{ g.poss_remaining }} | <span class="hca">HCA &plusmn;{{ g.hca_display }}</span>{% if g.blowout_regress > 0 %} | <span style="color:var(--amber)">RTM {{ g.blowout_regress }}%</span>{% endif %}</span>
-      <span>{{ g.home_abbrev }}: PPG {{ g.home_ppg }} <span class="pct-badge {{ g.home_ppg_cls }}">{{ g.home_ppg_pct }}%</span> | OPPG {{ g.home_oppg }} <span class="pct-badge {{ g.home_oppg_cls }}">{{ g.home_oppg_pct }}%</span>{{ "" if g.has_home_data else " &#9888;" }}</span>
+      <span>{{ g.home_abbrev }}: PPG {{ g.home_ppg }} <span class="pct-badge {{ g.home_ppg_cls }}">{{ g.home_ppg_pct }}%</span> | OPPG {{ g.home_oppg }} <span class="pct-badge {{ g.home_oppg_cls }}">{{ g.home_oppg_pct }}%</span></span>
     </div>
   </div>
   {% endfor %}
@@ -2575,10 +2575,10 @@ UPCOMING_PARTIAL = r"""{% if upcoming %}
     <tr>
       <td><span class="card-league-tag" style="background:{{ g.league_accent }};font-size:0.85em;padding:1px 6px;">{{ g.league_short }}</span></td>
       <td>{{ g.start_time_str }}</td>
-      <td class="team-cell">{{ g.away_name }}{{ "" if g.has_away_data else " &#9888;" }}</td>
+      <td class="team-cell">{{ g.away_name }}</td>
       <td>{{ g.away_ppg }}</td><td>{{ g.away_oppg }}</td>
       <td>{{ g.away_pace }}</td>
-      <td class="team-cell">{{ g.home_name }}{{ "" if g.has_home_data else " &#9888;" }}</td>
+      <td class="team-cell">{{ g.home_name }}</td>
       <td>{{ g.home_ppg }}</td><td>{{ g.home_oppg }}</td>
       <td>{{ g.home_pace }}</td>
       <td>{{ g.away_1h_proj }} - {{ g.home_1h_proj }}</td>
