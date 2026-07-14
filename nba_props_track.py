@@ -59,6 +59,8 @@ def gradeable_dates() -> list[str]:
     """All dates with a PDF that are strictly before today, sorted."""
     out = []
     for f in glob.glob(str(DOCS / "NBA_Props_Projections_*_2026.pdf")):
+        if "Projections_2_" in f:  # skip props-2 (pre-Jul-1 model) PDFs
+            continue
         ymd = G._fdate(f)
         if ymd < TODAY:
             out.append(ymd)

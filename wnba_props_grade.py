@@ -257,7 +257,8 @@ def _select(f: str, top_n: int | None, min_ev: float | None) -> list[dict]:
 def run_config(top_n: int | None = 10, min_ev: float | None = None):
     """Grade one universe across all days. Returns (season, rows, no_play_days)."""
     files = sorted(
-        glob.glob(str(DOCS / "WNBA_Props_Projections_*_2026.pdf")),
+        (f for f in glob.glob(str(DOCS / "WNBA_Props_Projections_*_2026.pdf"))
+         if "Projections_2_" not in f),  # exclude props-2 (pre-Jul-1 model) PDFs
         key=lambda f: _fdate(f),
     )
     rows = []
