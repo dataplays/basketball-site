@@ -62,7 +62,9 @@ LEAGUES = {
 DEFAULT_LEAGUE = "wnba"
 ACCENT = "#9ccc65"
 
-PROPS = [("pts", "Points"), ("reb", "Rebounds"), ("pr", "Pts+Reb")]
+# Single-stat props only — combo markets (P+R, P+A, PRA...) intentionally
+# excluded from every list on this page.
+PROPS = [("pts", "Points"), ("reb", "Rebounds")]
 MIN_REM_FOR_SD = 0.25       # below this many remaining min, outcome ~decided
 EV_HIGHLIGHT = 3.0          # green highlight at >= this EV%
 
@@ -543,7 +545,7 @@ def _ev_cell(ev) -> str:
     return f'<td class="{cls}">{ev:+.1f}%</td>'
 
 
-_PROP_SHORT = {"pts": "Pts", "reb": "Reb", "pr": "P+R"}
+_PROP_SHORT = {"pts": "Pts", "reb": "Reb"}
 
 
 def _short_name(name: str) -> str:
