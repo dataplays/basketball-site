@@ -73,6 +73,7 @@ DASH_COLORS = {
     "sgp": "#f06292",
     "bands": "#ff8a65",
     "inplay": "#9ccc65",
+    "livevacuum": "#ffb74d",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -108,6 +109,7 @@ LANDING_TOOLS = {
     "sgp": "SGP / parlay EV — correlation-priced same-game parlays",
     "bands": "SD bands — ±1.0/1.5/2.0 SD result ranges for a side & total",
     "inplay": "In-game props — live box + pregame model vs live lines, EV%",
+    "livevacuum": "Live vacuum props — in-game exits, redistributed minutes, live EV",
 }
 
 
@@ -159,6 +161,7 @@ EXTRA_DASHBOARDS = {
     "sgp_parlay_ev": ("sgp", "SGP / Parlay EV"),
     "game_sd_bands": ("bands", "Game SD Bands"),
     "inplay_props": ("inplay", "In-Game Prop Projections"),
+    "inplay_vacuum_props": ("livevacuum", "Live Vacuum Props"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
