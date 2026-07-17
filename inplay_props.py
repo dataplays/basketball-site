@@ -474,7 +474,8 @@ def top_plus_ev(games: list[dict]) -> list[dict]:
                 if ev is not None and ev > 0:
                     picks.append({**r, "side": side, "ev": ev,
                                   "odds": odds, "book": book,
-                                  "game": g["short_name"]})
+                                  "game": g["short_name"],
+                                  "event_id": g["event_id"]})
     picks.sort(key=lambda p: p["ev"], reverse=True)
     return picks
 
@@ -542,6 +543,34 @@ def _ev_cell(ev) -> str:
     return f'<td class="{cls}">{ev:+.1f}%</td>'
 
 
+_PROP_SHORT = {"pts": "Pts", "reb": "Reb", "pr": "P+R"}
+
+
+def _short_name(name: str) -> str:
+    parts = str(name).split()
+    if len(parts) >= 2:
+        return f"{parts[0][0]}. {parts[-1]}"
+    return name
+
+
+def _topbar(picks: list[dict]) -> str:
+    """Sticky quick-access strip of the best +EV plays."""
+    if not picks:
+        return ""
+    chips = []
+    for p in picks[:8]:
+        hot = " hot" if p["ev"] >= EV_HIGHLIGHT else ""
+        chips.append(
+            f'<a class="chip{hot}" href="#g{_esc(p["event_id"])}">'
+            f'<b>{_esc(_short_name(p["name"]))}</b> '
+            f'{_PROP_SHORT.get(p["prefix"], p["prop"])} '
+            f'{"O" if p["side"] == "OVER" else "U"} {p["line"]:g} '
+            f'<span class="odds">{_odds_txt(p["odds"])} {_esc(p["book"])}</span> '
+            f'<span class="ev">{p["ev"]:+.1f}%</span></a>')
+    return ('<div class="topbar"><span class="tb-label">TOP PLAYS</span>'
+            + "".join(chips) + "</div>")
+
+
 def render_page(league: str, games: list[dict], err: str | None) -> str:
     lg_opts = "".join(
         f'<option value="{k}"{" selected" if k == league else ""}>{v["label"]}</option>'
@@ -578,7 +607,7 @@ def render_page(league: str, games: list[dict], err: str | None) -> str:
                f'<span class="mut"> · {_esc(g["detail"])} · '
                f'{g["rem_game"]:.1f} min left</span>')
         if not g["rows"]:
-            body += (f'<div class="panel"><h2>{hdr}</h2>'
+            body += (f'<div class="panel" id="g{_esc(g["event_id"])}"><h2>{hdr}</h2>'
                      '<div class="note">No live prop lines posted for this game '
                      '(books pause props during play — refresh soon).</div></div>')
             continue
@@ -599,7 +628,7 @@ def render_page(league: str, games: list[dict], err: str | None) -> str:
                 f'{_ev_cell(r["ev_over"])}'
                 f'<td>{_odds_txt(r["under_odds"])} <span class="mut">{_esc(r["under_book"])}</span></td>'
                 f'{_ev_cell(r["ev_under"])}</tr>')
-        body += (f'<div class="panel"><h2>{hdr}</h2>'
+        body += (f'<div class="panel" id="g{_esc(g["event_id"])}"><h2>{hdr}</h2>'
                  '<table><tr><th>Player</th><th>Prop</th><th>Min</th><th>Now</th>'
                  '<th>Pregame</th><th>Rem min</th><th>Proj final</th><th>Live line</th>'
                  '<th>P(O) mod·mkt</th>'
@@ -607,6 +636,7 @@ def render_page(league: str, games: list[dict], err: str | None) -> str:
                  f'{"".join(trs)}</table></div>')
 
     return (PAGE.replace("{{LG_OPTS}}", lg_opts)
+                .replace("{{TOPBAR}}", _topbar(picks))
                 .replace("{{BODY}}", body)
                 .replace("{{ACCENT}}", ACCENT))
 
@@ -651,7 +681,20 @@ td.side{font-weight:700}
 .mut{color:var(--mut)}
 .note{color:var(--mut);font-size:12.5px;margin-top:10px;line-height:1.5}
 .note.err{color:#ffb4a2}
+.topbar{position:sticky;top:0;z-index:20;display:flex;gap:8px;align-items:center;
+overflow-x:auto;background:rgba(15,20,25,.97);border:1px solid var(--border);
+border-radius:10px;padding:10px 12px;margin-bottom:14px}
+.tb-label{color:var(--accent);font-size:11px;font-weight:800;letter-spacing:.08em;
+white-space:nowrap;flex:0 0 auto}
+.chip{display:inline-flex;gap:6px;align-items:center;white-space:nowrap;background:#151b23;
+border:1px solid var(--border);border-radius:999px;padding:6px 12px;font-size:12.5px;
+color:var(--text);text-decoration:none;flex:0 0 auto}
+.chip:hover{border-color:var(--accent)}
+.chip .ev{color:var(--up);font-weight:700}
+.chip .odds{color:var(--mut)}
+.chip.hot{border-color:rgba(76,175,80,.55);background:rgba(76,175,80,.10)}
 </style></head><body><div class=wrap>
+{{TOPBAR}}
 <h1>In-Game <span>Prop Projections</span></h1>
 <div class=sub>Live box score + the pregame props-engine forecast → each player's projected final line, versus the live multi-book prop market. Auto-refreshes every 60s. First load of a live game takes ~15-30s while pregame projections build (then cached).</div>
 <form method=get>
