@@ -74,6 +74,7 @@ DASH_COLORS = {
     "bands": "#ff8a65",
     "inplay": "#9ccc65",
     "livevacuum": "#ffb74d",
+    "contact": "#64b5f6",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -110,6 +111,7 @@ LANDING_TOOLS = {
     "bands": "SD bands — ±1.0/1.5/2.0 SD result ranges for a side & total",
     "inplay": "In-game props — live box + pregame model vs live lines, EV%",
     "livevacuum": "Live vacuum props — in-game exits, redistributed minutes, live EV",
+    "contact": "Feedback form + email the site owner",
 }
 
 
@@ -162,6 +164,7 @@ EXTRA_DASHBOARDS = {
     "game_sd_bands": ("bands", "Game SD Bands"),
     "inplay_props": ("inplay", "In-Game Prop Projections"),
     "inplay_vacuum_props": ("livevacuum", "Live Vacuum Props"),
+    "contact_page": ("contact", "Contact Us"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
@@ -247,7 +250,10 @@ LANDING_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 {{ head_extra|safe }}
 <title>Basketball Dashboards</title><style>{{ css }}</style></head><body>
 <header><h1><span>&#9679;</span> Basketball Dashboards</h1>
-<div class=sub>Live projections &amp; tools &middot; updates automatically</div></header>
+<div class=sub>Live projections &amp; tools &middot; updates automatically &middot;
+<a href="/contact/" style="color:#64b5f6;font-weight:600;text-decoration:none;
+border:1px solid #64b5f6;border-radius:999px;padding:3px 12px;font-size:12.5px;
+display:inline-block;margin-left:4px">&#9993; Contact Us</a></div></header>
 <div class=container>
   <div class=section>Live Projection Sets</div>
   {% if dashboards %}
@@ -289,7 +295,8 @@ LANDING_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
   </div>
 </div>
 <footer class=footer>Live data from ESPN, WarrenNolan &amp; Basketball-Reference &middot;
-projections update automatically &middot; <a href="/tools">Props Tools</a></footer>
+projections update automatically &middot; <a href="/tools">Props Tools</a> &middot;
+<a href="/contact/">Contact Us</a></footer>
 </body></html>"""
 
 TOOLS_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
