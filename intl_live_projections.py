@@ -993,6 +993,9 @@ APISPORTS_RATINGS: dict = {}          # slug -> {team_name: {ppg, oppg, pace, gp
 _apisports_cache: dict = {}           # slug -> (dash_games, ts, ttl)
 
 
+APISPORTS_LAST_ERROR = None   # last api-sports "errors" payload seen (diagnostic)
+
+
 def _apisports_get(path: str) -> dict:
     # api-sports signals a rate-limited/transient request as a 200 with a
     # non-empty "errors" field (not an HTTP error). When many leagues fetch at
@@ -1147,8 +1150,18 @@ def fetch_apisports_league(slug: str, league_id: int) -> list[dict]:
         return c[0]
     try:
         season = (_get_league_config(slug) or {}).get("season") or APISPORTS_SEASON
-        allg = (_apisports_get(f"/games?league={league_id}&season={season}")
-                .get("response") or [])
+        data = _apisports_get(f"/games?league={league_id}&season={season}")
+        errs = data.get("errors")
+        if errs:
+            # api-sports signals auth/quota/plan problems as a 200 with a
+            # non-empty "errors" object and an empty response — surface it
+            # instead of silently showing an empty slate.
+            global APISPORTS_LAST_ERROR
+            APISPORTS_LAST_ERROR = f"{slug}: {errs}"
+            print(f"  [WARN] api-sports {slug} error: {errs}", file=sys.stderr)
+            _apisports_cache[slug] = (c[0] if c else [], now, 300)
+            return c[0] if c else []
+        allg = data.get("response") or []
     except Exception as e:
         print(f"  [WARN] api-sports {slug} failed: {e}", file=sys.stderr)
         return c[0] if c else []
@@ -2873,6 +2886,7 @@ def api_games():
         # diagnostic (no secret value): is APISPORTS_KEY present, and which
         # leagues have api-sports ratings loaded (non-empty == calls succeeded)
         "apisports_key_set": bool(APISPORTS_KEY),
+        "apisports_error": APISPORTS_LAST_ERROR,
         "apisports_ratings": sorted(k for k, v in APISPORTS_RATINGS.items() if v),
     })
 
