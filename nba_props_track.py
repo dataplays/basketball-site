@@ -271,7 +271,12 @@ def main():
         targets = [d for d in gradeable_dates() if d not in have]
 
     if not targets:
-        print("Tracker already up to date — no new settled slates.")
+        if not gradeable_dates():
+            print(f"No projections PDFs found in {DOCS} — nothing to grade in this environment.")
+            print("(PDFs live on the local machine, where grading happens; on the website")
+            print(" server the summary below reflects the last synced tracker snapshot.)")
+        else:
+            print("Tracker already up to date — no new settled slates.")
         print_summary()
         return
 
