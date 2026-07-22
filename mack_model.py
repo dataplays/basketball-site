@@ -204,6 +204,14 @@ def main():
     if _quota.get("remaining"):
         print(f"\n  Odds API credits remaining: {_quota['remaining']}")
 
+    # keep the local W/L tracker current (no-op where the tracker module
+    # isn't present, e.g. on the website server)
+    try:
+        import mack_model_track as T
+        T.auto_update()
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     main()
