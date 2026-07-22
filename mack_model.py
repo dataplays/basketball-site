@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-mack_model.py — "Mack Model" Pinnacle-vs-DraftKings prop scanner.
+mack_model.py — "Mack Model" Pinnacle-vs-BetRivers prop scanner.
 =================================================================
 Python port of Andrew Mack's (@gingfacekillah) "NBA Props with R" project
 (and our WNBA rework in Documents\\WNBA_props), so it can run from the
@@ -8,11 +8,12 @@ basketball-site /tools page (Render has no R) and locally.
 
 Strategy (identical to the R version):
   * Pinnacle is the sharp anchor. For every player prop offered by BOTH
-    Pinnacle and DraftKings, compute the implied-probability gap on the
-    over and under: diff = (1/pinnacle_price) - (1/draftkings_price).
+    Pinnacle and the soft book (SOFT_BOOK below; currently BetRivers),
+    compute the implied-probability gap on the over and under:
+    diff = (1/pinnacle_price) - (1/soft_book_price).
   * Compute Pinnacle's average vig per prop type across the slate.
   * Flag props where a gap exceeds 50% of that average vig AND the two
-    books have the SAME line -> bet that side AT DRAFTKINGS.
+    books have the SAME line -> bet that side AT THE SOFT BOOK.
 
 Scans WNBA and NBA (whichever has events; NBA is silent in the off-season).
 Markets: points, threes, rebounds, assists, PRA.
@@ -45,6 +46,9 @@ MARKETS = [
     ("player_points_rebounds_assists", "PRA"),
 ]
 VIG_FRACTION = 0.5          # flag when gap > this fraction of avg Pinnacle vig
+# The soft book to shop against Pinnacle (The Odds API key, label, abbrev).
+# Swap books by changing this one line (e.g. ("draftkings", "DraftKings", "DK")).
+SOFT_BOOK = ("betrivers", "BetRivers", "BR")
 
 _quota = {}
 
@@ -73,7 +77,7 @@ def fetch_events(sport):
 def fetch_event_market(sport, event_id, market_key):
     url = (f"{BASE}{sport}/events/{event_id}/odds?apiKey={API_KEY}"
            f"&regions=eu,us&markets={market_key}"
-           f"&bookmakers=pinnacle,draftkings&oddsFormat=decimal")
+           f"&bookmakers=pinnacle,{SOFT_BOOK[0]}&oddsFormat=decimal")
     try:
         return _get(url)
     except Exception:
@@ -116,20 +120,20 @@ def scan_sport(sport, league):
         for ev in events:
             data = fetch_event_market(sport, ev["id"], mkey)
             pin = book_props(data, "pinnacle")
-            dk = book_props(data, "draftkings")
+            soft = book_props(data, SOFT_BOOK[0])
             for player, (pin_line, pin_over, pin_under) in pin.items():
-                if player not in dk:
+                if player not in soft:
                     continue
-                dk_line, dk_over, dk_under = dk[player]
+                soft_line, soft_over, soft_under = soft[player]
                 market_rows.append({
                     "player": player, "league": league, "prop": mlabel,
                     "date": ev.get("commence_time", "")[:10],
                     "game": f'{ev.get("away_team", "")} @ {ev.get("home_team", "")}',
-                    "dk_line": dk_line, "pin_line": pin_line,
-                    "dk_over": dk_over, "pin_over": pin_over,
-                    "dk_under": dk_under, "pin_under": pin_under,
-                    "over_diff": 1 / pin_over - 1 / dk_over,
-                    "under_diff": 1 / pin_under - 1 / dk_under,
+                    "soft_line": soft_line, "pin_line": pin_line,
+                    "soft_over": soft_over, "pin_over": pin_over,
+                    "soft_under": soft_under, "pin_under": pin_under,
+                    "over_diff": 1 / pin_over - 1 / soft_over,
+                    "under_diff": 1 / pin_under - 1 / soft_under,
                     "pin_vig": (1 / pin_over + 1 / pin_under) - 1,
                 })
         if not market_rows:
@@ -139,7 +143,7 @@ def scan_sport(sport, league):
         flagged = [r for r in market_rows
                    if (r["over_diff"] > VIG_FRACTION * avg_vig
                        or r["under_diff"] > VIG_FRACTION * avg_vig)
-                   and r["dk_line"] == r["pin_line"]]
+                   and r["soft_line"] == r["pin_line"]]
         print(f"    {mlabel:<9} {len(market_rows):>3} props at both books | "
               f"avg Pinnacle vig {avg_vig * 100:4.1f}% | {len(flagged)} flagged")
         for r in flagged:
@@ -151,11 +155,11 @@ def scan_sport(sport, league):
 
 def main():
     print("=" * 78)
-    print("  MACK MODEL — Pinnacle vs DraftKings prop scanner "
+    print(f"  MACK MODEL — Pinnacle vs {SOFT_BOOK[1]} prop scanner "
           f"({datetime.now().strftime('%Y-%m-%d %H:%M')})")
     print("  Flags props where the implied-probability gap > "
           f"{VIG_FRACTION:.0%} of avg Pinnacle vig,")
-    print("  at matching lines. Flagged side is the bet AT DRAFTKINGS.")
+    print(f"  at matching lines. Flagged side is the bet AT {SOFT_BOOK[1].upper()}.")
     print("=" * 78)
 
     all_rows = []
@@ -167,15 +171,15 @@ def main():
               "game day — try again around midday ET on a slate day.")
     else:
         all_rows.sort(key=lambda r: -r["edge"])
-        print(f"\n  {len(all_rows)} QUALIFYING PROPS (bet at DraftKings)")
+        print(f"\n  {len(all_rows)} QUALIFYING PROPS (bet at {SOFT_BOOK[1]})")
         print(f"  {'Player':<24} {'Lg':<5} {'Prop':<9} {'Line':>5} {'Bet':<6} "
-              f"{'DK odds':>8} {'PIN odds':>9} {'Edge':>6}  Game")
+              f"{SOFT_BOOK[2] + ' odds':>8} {'PIN odds':>9} {'Edge':>6}  Game")
         print("  " + "-" * 106)
         for r in all_rows:
-            odds_dk = r["dk_over"] if r["bet"] == "over" else r["dk_under"]
+            odds_soft = r["soft_over"] if r["bet"] == "over" else r["soft_under"]
             odds_pin = r["pin_over"] if r["bet"] == "over" else r["pin_under"]
             print(f"  {r['player'][:24]:<24} {r['league']:<5} {r['prop']:<9} "
-                  f"{r['dk_line']:>5} {r['bet']:<6} {odds_dk:>8.2f} "
+                  f"{r['soft_line']:>5} {r['bet']:<6} {odds_soft:>8.2f} "
                   f"{odds_pin:>9.2f} {r['edge'] * 100:>5.1f}%  {r['game']}")
         n_over = sum(1 for r in all_rows if r["bet"] == "over")
         print(f"\n  Over/Under split: {n_over} over / {len(all_rows) - n_over} under")

@@ -179,7 +179,7 @@ for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
 # Extra command-line tools (not matching *_props_*.py) to expose on the Tools page.
 EXTRA_TOOLS = {
     "update_all_stats": "Update All Stats \u2014 refresh NBA/WNBA/CBB/WCBB ratings",
-    "mack_model": "Mack Model \u2014 Pinnacle vs DraftKings prop scanner (WNBA + NBA)",
+    "mack_model": "Mack Model \u2014 Pinnacle vs BetRivers prop scanner (WNBA + NBA)",
 }
 for _tname, _tlabel in EXTRA_TOOLS.items():
     if (HERE / f"{_tname}.py").exists() and _tname not in TOOLS:
