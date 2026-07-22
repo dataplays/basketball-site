@@ -85,24 +85,21 @@ def fetch_event_market(sport, event_id, market_key):
 
 
 def book_props(event_data, book):
-    """{player: (line, over_price, under_price)} for one bookmaker."""
+    """{(player, line): {"over": price, "under": price}} for one bookmaker.
+    Keyed by line so alt-line ladders survive, and one-sided listings are
+    kept (BetRivers posts over-only prices via the API)."""
     out = {}
     for bm in event_data.get("bookmakers", []) or []:
         if bm.get("key") != book:
             continue
         for mkt in bm.get("markets", []) or []:
-            overs, unders = {}, {}
             for o in mkt.get("outcomes", []) or []:
                 player, point = o.get("description"), o.get("point")
                 price = o.get("price")
                 if not player or point is None or not price:
                     continue
-                side = overs if o.get("name") == "Over" else unders
-                side[(player, point)] = price
-            for (player, point), over_p in overs.items():
-                under_p = unders.get((player, point))
-                if under_p:
-                    out[player] = (point, over_p, under_p)
+                side = "over" if o.get("name") == "Over" else "under"
+                out.setdefault((player, point), {})[side] = price
     return out
 
 
@@ -121,34 +118,42 @@ def scan_sport(sport, league):
             data = fetch_event_market(sport, ev["id"], mkey)
             pin = book_props(data, "pinnacle")
             soft = book_props(data, SOFT_BOOK[0])
-            for player, (pin_line, pin_over, pin_under) in pin.items():
-                if player not in soft:
-                    continue
-                soft_line, soft_over, soft_under = soft[player]
+            for (player, line), pp in pin.items():
+                if "over" not in pp or "under" not in pp:
+                    continue          # need the full Pinnacle pair (vig anchor)
+                sp = soft.get((player, line))
+                if not sp:
+                    continue          # exact same line at the soft book only
+                over_diff = (1 / pp["over"] - 1 / sp["over"]
+                             if "over" in sp else None)
+                under_diff = (1 / pp["under"] - 1 / sp["under"]
+                              if "under" in sp else None)
                 market_rows.append({
                     "player": player, "league": league, "prop": mlabel,
                     "date": ev.get("commence_time", "")[:10],
                     "game": f'{ev.get("away_team", "")} @ {ev.get("home_team", "")}',
-                    "soft_line": soft_line, "pin_line": pin_line,
-                    "soft_over": soft_over, "pin_over": pin_over,
-                    "soft_under": soft_under, "pin_under": pin_under,
-                    "over_diff": 1 / pin_over - 1 / soft_over,
-                    "under_diff": 1 / pin_under - 1 / soft_under,
-                    "pin_vig": (1 / pin_over + 1 / pin_under) - 1,
+                    "soft_line": line, "pin_line": line,
+                    "soft_over": sp.get("over"), "pin_over": pp["over"],
+                    "soft_under": sp.get("under"), "pin_under": pp["under"],
+                    "over_diff": over_diff, "under_diff": under_diff,
+                    "pin_vig": (1 / pp["over"] + 1 / pp["under"]) - 1,
                 })
         if not market_rows:
             print(f"    {mlabel:<9} no props at BOTH books")
             continue
         avg_vig = sum(r["pin_vig"] for r in market_rows) / len(market_rows)
-        flagged = [r for r in market_rows
-                   if (r["over_diff"] > VIG_FRACTION * avg_vig
-                       or r["under_diff"] > VIG_FRACTION * avg_vig)
-                   and r["soft_line"] == r["pin_line"]]
+        thr = VIG_FRACTION * avg_vig
+        flagged = []
+        for r in market_rows:
+            sides = {s: d for s, d in (("over", r["over_diff"]),
+                                       ("under", r["under_diff"]))
+                     if d is not None}
+            best = max(sides, key=sides.get, default=None)
+            if best is not None and sides[best] > thr:
+                r["bet"], r["edge"] = best, sides[best]
+                flagged.append(r)
         print(f"    {mlabel:<9} {len(market_rows):>3} props at both books | "
               f"avg Pinnacle vig {avg_vig * 100:4.1f}% | {len(flagged)} flagged")
-        for r in flagged:
-            r["bet"] = "over" if r["over_diff"] > r["under_diff"] else "under"
-            r["edge"] = max(r["over_diff"], r["under_diff"])
         rows.extend(flagged)
     return rows
 
