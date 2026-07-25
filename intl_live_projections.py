@@ -2890,6 +2890,9 @@ def api_games():
         "apisports_key_set": bool(APISPORTS_KEY),
         "apisports_error": APISPORTS_LAST_ERROR,
         "apisports_ratings": sorted(k for k, v in APISPORTS_RATINGS.items() if v),
+        # configured (regardless of data) — distinguishes "league not deployed"
+        # from "league deployed but its season query returned no games"
+        "apisports_configured": sorted(APISPORTS_LEAGUES),
     })
 
 
