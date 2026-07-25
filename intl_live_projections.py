@@ -973,6 +973,7 @@ APISPORTS_LEAGUES = {                 # dashboard slug -> api-sports league id
     # added Jun 2026 — other pro leagues active now (configs in EXTRA_APISPORTS_LEAGUES)
     "pr-bsn": 76, "ph-mpbl": 426, "ca-cebl": 222, "nz-nbl": 66,
     "ar-liga-a": 18, "pl-ebl": 72, "id-ibl": 139, "do-lnb": 380,
+    "mx-lnbp": 63,   # added Jul 2026 — Mexico LNBP (calendar-year season)
 }
 # Non-eurobasket leagues: games + ratings come only from api-sports (so they
 # show as games but not in the eurobasket standings section). "season" overrides
@@ -986,6 +987,7 @@ EXTRA_APISPORTS_LEAGUES = {
     "pl-ebl":    {"name": "Energa Basket Liga (Poland)", "short": "PLK",    "emoji": "\U0001F1F5\U0001F1F1", "accent": "#e63946", "season": "2025-2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
     "id-ibl":    {"name": "IBL (Indonesia)",             "short": "IBL",    "emoji": "\U0001F1EE\U0001F1E9", "accent": "#ef476f", "season": "2025-2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
     "do-lnb":    {"name": "LNB (Dominican Rep.)",        "short": "DOM",    "emoji": "\U0001F1E9\U0001F1F4", "accent": "#168aad", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "mx-lnbp":   {"name": "LNBP (Mexico)",               "short": "LNBP",   "emoji": "\U0001F1F2\U0001F1FD", "accent": "#43a047", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
 }
 APISPORTS_LIVE = {"Q1", "Q2", "Q3", "Q4", "OT", "HT", "BT", "ET"}
 APISPORTS_FINAL = {"FT", "AOT", "AET"}
