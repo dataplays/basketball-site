@@ -973,7 +973,7 @@ APISPORTS_LEAGUES = {                 # dashboard slug -> api-sports league id
     # added Jun 2026 — other pro leagues active now (configs in EXTRA_APISPORTS_LEAGUES)
     "pr-bsn": 76, "ph-mpbl": 426, "ca-cebl": 222, "nz-nbl": 66,
     "ar-liga-a": 18, "pl-ebl": 72, "id-ibl": 139, "do-lnb": 380,
-    "mx-lnbp": 63,   # added Jul 2026 — Mexico LNBP (calendar-year season)
+    "mx-lnbp": 63,   # added Jul 2026 — Mexico LNBP (split season, opens Oct 8 2026)
 }
 # Non-eurobasket leagues: games + ratings come only from api-sports (so they
 # show as games but not in the eurobasket standings section). "season" overrides
@@ -987,7 +987,7 @@ EXTRA_APISPORTS_LEAGUES = {
     "pl-ebl":    {"name": "Energa Basket Liga (Poland)", "short": "PLK",    "emoji": "\U0001F1F5\U0001F1F1", "accent": "#e63946", "season": "2025-2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
     "id-ibl":    {"name": "IBL (Indonesia)",             "short": "IBL",    "emoji": "\U0001F1EE\U0001F1E9", "accent": "#ef476f", "season": "2025-2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
     "do-lnb":    {"name": "LNB (Dominican Rep.)",        "short": "DOM",    "emoji": "\U0001F1E9\U0001F1F4", "accent": "#168aad", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
-    "mx-lnbp":   {"name": "LNBP (Mexico)",               "short": "LNBP",   "emoji": "\U0001F1F2\U0001F1FD", "accent": "#43a047", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "mx-lnbp":   {"name": "LNBP (Mexico)",               "short": "LNBP",   "emoji": "\U0001F1F2\U0001F1FD", "accent": "#43a047", "season": "2026-2027", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
 }
 APISPORTS_LIVE = {"Q1", "Q2", "Q3", "Q4", "OT", "HT", "BT", "ET"}
 APISPORTS_FINAL = {"FT", "AOT", "AET"}
@@ -2894,36 +2894,6 @@ def api_games():
         # from "league deployed but its season query returned no games"
         "apisports_configured": sorted(APISPORTS_LEAGUES),
     })
-
-
-@app.route("/api/_lnbp_diag")
-def _lnbp_diag():
-    """TEMPORARY diagnostic: ask api-sports (key lives on the server) which
-    league id + season labels carry Mexican LNBP data. Remove once wired."""
-    if not APISPORTS_KEY:
-        return jsonify({"error": "no APISPORTS_KEY"})
-    out = {}
-    try:
-        srch = _apisports_get("/leagues?search=lnbp")
-        out["search"] = [{"id": l.get("id"), "name": l.get("name"),
-                          "country": (l.get("country") or {}).get("name"),
-                          "seasons": [s.get("season") for s in (l.get("seasons") or [])][-6:]}
-                         for l in (srch.get("response") or [])]
-    except Exception as e:
-        out["search_error"] = str(e)
-    for season in ("2026", "2025", "2025-2026", "2026-2027"):
-        try:
-            g = _apisports_get(f"/games?league=63&season={season}")
-            resp = g.get("response") or []
-            out[f"games_63_{season}"] = {
-                "count": len(resp), "errors": g.get("errors") or None,
-                "sample": ({"date": resp[-1].get("date"),
-                            "teams": ((resp[-1].get("teams") or {}).get("home", {}).get("name"),
-                                      (resp[-1].get("teams") or {}).get("away", {}).get("name"))}
-                           if resp else None)}
-        except Exception as e:
-            out[f"games_63_{season}"] = {"error": str(e)}
-    return jsonify(out)
 
 
 @app.route("/refresh")
