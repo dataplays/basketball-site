@@ -180,6 +180,7 @@ for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
 EXTRA_TOOLS = {
     "update_all_stats": "Update All Stats \u2014 refresh NBA/WNBA/CBB/WCBB ratings",
     "mack_model": "Mack Model \u2014 Pinnacle vs BetRivers prop scanner (WNBA + NBA)",
+    "line_movement_report": "Line Movement \u2014 open\u2192close spread steam, last 5 games per team",
 }
 for _tname, _tlabel in EXTRA_TOOLS.items():
     if (HERE / f"{_tname}.py").exists() and _tname not in TOOLS:
