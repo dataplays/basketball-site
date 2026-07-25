@@ -2896,6 +2896,36 @@ def api_games():
     })
 
 
+@app.route("/api/_lnbp_diag")
+def _lnbp_diag():
+    """TEMPORARY diagnostic: ask api-sports (key lives on the server) which
+    league id + season labels carry Mexican LNBP data. Remove once wired."""
+    if not APISPORTS_KEY:
+        return jsonify({"error": "no APISPORTS_KEY"})
+    out = {}
+    try:
+        srch = _apisports_get("/leagues?search=lnbp")
+        out["search"] = [{"id": l.get("id"), "name": l.get("name"),
+                          "country": (l.get("country") or {}).get("name"),
+                          "seasons": [s.get("season") for s in (l.get("seasons") or [])][-6:]}
+                         for l in (srch.get("response") or [])]
+    except Exception as e:
+        out["search_error"] = str(e)
+    for season in ("2026", "2025", "2025-2026", "2026-2027"):
+        try:
+            g = _apisports_get(f"/games?league=63&season={season}")
+            resp = g.get("response") or []
+            out[f"games_63_{season}"] = {
+                "count": len(resp), "errors": g.get("errors") or None,
+                "sample": ({"date": resp[-1].get("date"),
+                            "teams": ((resp[-1].get("teams") or {}).get("home", {}).get("name"),
+                                      (resp[-1].get("teams") or {}).get("away", {}).get("name"))}
+                           if resp else None)}
+        except Exception as e:
+            out[f"games_63_{season}"] = {"error": str(e)}
+    return jsonify(out)
+
+
 @app.route("/refresh")
 def refresh_ratings():
     """Trigger a fresh ratings reload in the background (non-blocking)."""
