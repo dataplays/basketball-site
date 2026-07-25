@@ -277,9 +277,13 @@ display:inline-block;margin-left:4px">&#9993; Contact Us</a></div></header>
       <div class=d>{{ desc }}</div>
     </a>
     {% endfor %}
+    <a class=card style="border-left-color:#4db6ac" href="/tools?run=line_movement_report">
+      <div class=t>Line Movement</div>
+      <div class=d>Open&rarr;close spread steam &mdash; last 5 games per team, every upcoming game</div>
+    </a>
     <a class=card style="border-left-color:var(--green)" href="/tools">
       <div class=t>Props Tools &rarr;</div>
-      <div class=d>Run projections &amp; grading on demand</div>
+      <div class=d>Run projections, grading, Mack Model &amp; line movement on demand</div>
     </a>
     {% if reports %}
       {% for r in reports %}
@@ -315,7 +319,7 @@ TOOLS_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
       <div class=t>{{ label }}</div>
       {% if missing %}<div class=warn>Needs file(s): {{ missing|join(', ') }} &mdash; upload to the server to enable.</div>{% endif %}
     </div>
-    <button onclick="run('{{ name }}',this)" {{ 'disabled' if missing else '' }}>Run</button>
+    <button data-tool="{{ name }}" onclick="run('{{ name }}',this)" {{ 'disabled' if missing else '' }}>Run</button>
   </div>
   {% endfor %}
   <pre id=out>Output will appear here.</pre>
@@ -332,6 +336,14 @@ async function run(name,btn){
   }catch(e){out.textContent='Error: '+e;}
   btn.disabled=false;btn.textContent=old;
 }
+// ?run=<tool> deep link: auto-run that tool on page load (homepage cards use this)
+try{
+  const auto=new URLSearchParams(location.search).get('run');
+  if(auto){
+    const b=document.querySelector('button[data-tool="'+(window.CSS&&CSS.escape?CSS.escape(auto):auto)+'"]');
+    if(b&&!b.disabled){b.scrollIntoView({block:'center'});b.click();}
+  }
+}catch(e){}
 </script></body></html>"""
 
 
