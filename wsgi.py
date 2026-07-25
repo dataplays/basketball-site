@@ -281,6 +281,10 @@ display:inline-block;margin-left:4px">&#9993; Contact Us</a></div></header>
       <div class=t>Line Movement</div>
       <div class=d>Open&rarr;close spread steam &mdash; last 5 games per team, every upcoming game</div>
     </a>
+    <a class=card style="border-left-color:#ba68c8" href="/tools?run=mack_model">
+      <div class=t>Mack Model</div>
+      <div class=d>Pinnacle vs BetRivers prop scanner &mdash; WNBA + NBA edges at matching lines</div>
+    </a>
     <a class=card style="border-left-color:var(--green)" href="/tools">
       <div class=t>Props Tools &rarr;</div>
       <div class=d>Run projections, grading, Mack Model &amp; line movement on demand</div>
