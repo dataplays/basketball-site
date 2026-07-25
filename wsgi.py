@@ -181,6 +181,7 @@ EXTRA_TOOLS = {
     "update_all_stats": "Update All Stats \u2014 refresh NBA/WNBA/CBB/WCBB ratings",
     "mack_model": "Mack Model \u2014 Pinnacle vs BetRivers prop scanner (WNBA + NBA)",
     "line_movement_report": "Line Movement \u2014 open\u2192close spread steam, last 5 games per team",
+    "mack_model_games": "Mack Model: Games \u2014 Pinnacle vs BetRivers sides/totals/ML/team totals (FG/1H/1Q)",
 }
 for _tname, _tlabel in EXTRA_TOOLS.items():
     if (HERE / f"{_tname}.py").exists() and _tname not in TOOLS:
@@ -284,6 +285,10 @@ display:inline-block;margin-left:4px">&#9993; Contact Us</a></div></header>
     <a class=card style="border-left-color:#ba68c8" href="/tools?run=mack_model">
       <div class=t>Mack Model</div>
       <div class=d>Pinnacle vs BetRivers prop scanner &mdash; WNBA + NBA edges at matching lines</div>
+    </a>
+    <a class=card style="border-left-color:#9575cd" href="/tools?run=mack_model_games">
+      <div class=t>Mack Model: Games</div>
+      <div class=d>Pinnacle vs BetRivers game markets &mdash; sides, totals, ML &amp; team totals (FG/1H/1Q)</div>
     </a>
     <a class=card style="border-left-color:var(--green)" href="/tools">
       <div class=t>Props Tools &rarr;</div>
