@@ -109,7 +109,12 @@ INGAME_BLEND_FULL_PTS = 90.0    # combined points at which blending would hit it
 HCA_PPP_MULT = 1.00             # 1.00 == no home edge
 
 DEFAULT_SIMS = 8000
-FEED_URL = "https://big3.com/wp-json/big3/v1/schedule/{year}"
+# Primary = the AirPLAi/Genius feed hit directly (big3.com's frontend uses this
+# via api_vars.airplaiProxyPath). The wp-json proxy wraps the SAME body but
+# broke Jul 2026 ("AirPLAi API key is not configured", HTTP 500) — kept only as
+# a fallback in case the direct host moves.
+FEED_URL = "https://api.big3.com/schedule/{year}"
+FEED_URL_FALLBACK = "https://big3.com/wp-json/big3/v1/schedule/{year}"
 SEASON_YEAR = 2026
 PORT = 5006
 FEED_CACHE_SECS = 18
@@ -342,16 +347,25 @@ def fetch_feed(year=SEASON_YEAR, force=False):
                  and (now - _feed_cache["ts"]) < FEED_CACHE_SECS)
         if fresh and not force:
             return _feed_cache["raw"]
-    try:
-        r = requests.get(
-            FEED_URL.format(year=year),
-            timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 (BIG3-live-projections)"},
-        )
-        r.raise_for_status()
-        raw = r.json()
-    except Exception as e:
-        print(f"[feed] fetch error: {e}", file=sys.stderr)
+    raw = None
+    for url in (FEED_URL, FEED_URL_FALLBACK):
+        try:
+            r = requests.get(
+                url.format(year=year),
+                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0 (BIG3-live-projections)"},
+            )
+            r.raise_for_status()
+            body = r.json()
+            if isinstance(body, dict) and body.get("apiResults"):
+                raw = body
+                break
+            print(f"[feed] {url.format(year=year)}: no apiResults in body",
+                  file=sys.stderr)
+        except Exception as e:
+            print(f"[feed] fetch error ({url.format(year=year)}): {e}",
+                  file=sys.stderr)
+    if raw is None:
         with _feed_lock:
             return _feed_cache["raw"]      # serve stale on error if we have it
     with _feed_lock:
