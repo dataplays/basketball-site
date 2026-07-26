@@ -2896,6 +2896,39 @@ def api_games():
     })
 
 
+@app.route("/api/_chile_diag")
+def _chile_diag():
+    """TEMPORARY diagnostic: ask api-sports (key lives on the server) for
+    Chile's leagues, their ids, season labels, and per-season game counts +
+    date ranges. Remove once the league is wired."""
+    if not APISPORTS_KEY:
+        return jsonify({"error": "no APISPORTS_KEY"})
+    out = {}
+    try:
+        srch = _apisports_get("/leagues?country=Chile")
+        leagues = srch.get("response") or []
+        out["leagues"] = []
+        for l in leagues:
+            seasons = [s.get("season") for s in (l.get("seasons") or [])]
+            entry = {"id": l.get("id"), "name": l.get("name"),
+                     "type": l.get("type"), "seasons": seasons[-5:]}
+            for season in seasons[-3:]:
+                try:
+                    g = _apisports_get(f"/games?league={l.get('id')}&season={season}")
+                    resp = g.get("response") or []
+                    dates = sorted(x.get("date", "") for x in resp if x.get("date"))
+                    entry[f"season_{season}"] = {
+                        "count": len(resp), "errors": g.get("errors") or None,
+                        "first": dates[0][:10] if dates else None,
+                        "last": dates[-1][:10] if dates else None}
+                except Exception as e:
+                    entry[f"season_{season}"] = {"error": str(e)}
+            out["leagues"].append(entry)
+    except Exception as e:
+        out["error"] = str(e)
+    return jsonify(out)
+
+
 @app.route("/refresh")
 def refresh_ratings():
     """Trigger a fresh ratings reload in the background (non-blocking)."""
