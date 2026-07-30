@@ -37,12 +37,18 @@ ACCENT = "#15c39a"
 # Books we expose. Exchanges (prophetx/kalshi) carry real `limit` size, so they
 # get liquidity bars + the kappa-shaded line. Traditional sportsbooks post odds
 # only (no size) -> we show their odds + the no-vig fair line, no bar/shade.
-EXCHANGES = {"prophetx", "kalshi"}
+# "pxdirect" = ProphetX's OFFICIAL Trading API (needs PROPHETX_ACCESS_KEY/
+# SECRET_KEY env): same exchange treatment, but with FULL book depth (each
+# price also carries `total` = money across every level, shown in parens).
+# It is deliberately NOT in COMPARE_BOOKS: Compare/Arbs join on OddsPapi
+# fixture ids + catalog headers, and the direct feed has neither.
+EXCHANGES = {"prophetx", "kalshi", "pxdirect"}
 SPORTSBOOKS = {"pinnacle", "caesars", "betrivers", "thescore", "fanduel"}
 BOOKS = EXCHANGES | SPORTSBOOKS
 # Book selector buttons (label -> view); "compare" is a special PX-vs-Kalshi mode.
 # Pinnacle is the sharpest book, so it sits right after the exchanges.
-BOOK_CHIPS = [("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
+BOOK_CHIPS = [("PX Direct", "pxdirect"),
+              ("ProphetX", "prophetx"), ("Kalshi", "kalshi"),
               ("Pinnacle", "pinnacle"),
               ("Caesars", "caesars"), ("BetRivers", "betrivers"),
               ("theScore", "thescore"), ("FanDuel", "fanduel"),
@@ -65,8 +71,11 @@ def cached_games(tournament: int, book: str = "prophetx"):
     hit = _cache.get((tournament, book))
     if hit and now - hit[0] < CACHE_TTL:
         return hit[1], hit[0]
-    games = px.gather(KEY, sport=11, tournament=tournament or None,
-                      book=book, min_limit=0.0)
+    if book == "pxdirect":
+        games = px.gather_direct(tournament or 0)
+    else:
+        games = px.gather(KEY, sport=11, tournament=tournament or None,
+                          book=book, min_limit=0.0)
     _cache[(tournament, book)] = (now, games)
     return games, now
 
@@ -496,7 +505,11 @@ def filter_min_limit(games: list, min_limit: float) -> list:
 
 @app.route("/api/lines")
 def api_lines():
-    if not KEY:
+    book = request.args.get("book", "prophetx")
+    if book not in BOOKS:
+        book = "prophetx"
+    # pxdirect uses ProphetX's own API keys, not the OddsPapi key
+    if not KEY and book != "pxdirect":
         return jsonify(ok=False, error="ODDSPAPI_KEY not set on the server."), 200
     try:
         tournament = int(request.args.get("tournament", 0) or 0)
@@ -506,9 +519,6 @@ def api_lines():
         min_limit = float(request.args.get("min_limit", 0) or 0)
     except ValueError:
         min_limit = 0.0
-    book = request.args.get("book", "prophetx")
-    if book not in BOOKS:
-        book = "prophetx"
     try:
         kappa = float(request.args.get("kappa", 0) or 0)
     except ValueError:
@@ -517,11 +527,11 @@ def api_lines():
     by_liability = request.args.get("weight", "stake") == "liability"
     try:
         games, ts = cached_games(tournament, book)
-    except px.OddsPapiError as exc:
+    except (px.OddsPapiError, px.ProphetXDirectError) as exc:
         return jsonify(ok=False, error=str(exc)), 200
     if book in EXCHANGES:                 # sportsbooks have no size to filter on
         games = filter_min_limit(games, min_limit)
-    if book == "prophetx":                # no-vig fair line is ProphetX-only
+    if book in ("prophetx", "pxdirect"):  # no-vig fair line: ProphetX views only
         games = attach_fair(games, kappa, by_liability)
     value_bets = []
     if book in SPORTSBOOKS:               # flag +EV vs the ProphetX no-vig line
@@ -785,6 +795,7 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
 .bar i{display:block;height:100%;background:linear-gradient(90deg,#2ea043,#3fb950)}
 .amt{font-variant-numeric:tabular-nums;font-size:13px;color:var(--money);
      font-weight:650;white-space:nowrap;min-width:64px;text-align:right}
+.tdep{color:var(--muted);font-size:10.5px;font-weight:500}
 .empty,.err{color:var(--muted);text-align:center;padding:60px 20px;font-size:15px}
 .err{color:#f0883e}
 .foot{color:var(--muted);font-size:11.5px;text-align:center;margin-top:24px;line-height:1.6}
@@ -838,8 +849,11 @@ main{max-width:1060px;margin:0 auto;padding:18px 16px 60px}
   </div>
 </header>
 <main><div id="games"></div>
-  <div class="foot"><b>ProphetX</b> shows the <b>USD available to match right now</b> per price
-   (top-of-book) plus a no-vig, &kappa;-shaded fair line. <b>Kalshi</b> shows exchange size
+  <div class="foot"><b>PX Direct</b> pulls ProphetX's <b>own Trading API</b> &mdash; full order-book
+   depth per side: the bold figure is top-of-book USD, the grey figure in parens is the total
+   across every price level. Click any line to open its ProphetX order ticket.<br>
+   <b>ProphetX</b> shows the <b>USD available to match right now</b> per price
+   (top-of-book, via OddsPapi) plus a no-vig, &kappa;-shaded fair line. <b>Kalshi</b> shows exchange size
    (moneyline-only). Sportsbooks (<b>Caesars</b>, <b>BetRivers</b>, <b>theScore</b>, <b>FanDuel</b>)
    post odds only, topped with any bets that are <b>+EV vs the ProphetX no-vig line</b>.<br>
    <b>Compare</b> line-shops every market (moneyline, spreads, totals, props) across all books
@@ -913,10 +927,12 @@ function render(d){
             '<span class="odds">'+o.decimal+am+'</span></a>';
         }
         const w = Math.max(4, Math.round(o.limit/maxL*100));
+        const dep = (o.total && o.total > o.limit)
+          ? ' <span class="tdep">($'+Math.round(o.total).toLocaleString()+')</span>' : '';
         return '<a class="row"'+href+'><span class="sel">'+esc(o.sel)+'</span>'+
           '<span class="odds">'+o.decimal+am+'</span>'+
           '<span class="liq"><span class="bar"><i style="width:'+w+'%"></i></span>'+
-          '<span class="amt">$'+Math.round(o.limit).toLocaleString()+'</span></span></a>';
+          '<span class="amt">$'+Math.round(o.limit).toLocaleString()+dep+'</span></span></a>';
       }).join('');
     const mkt = m => '<div class="market"><div class="mhdr">'+esc(m.header)+'</div>'+
       (m.fair ? fairTable(m) : rowsHtml(m))+'</div>';

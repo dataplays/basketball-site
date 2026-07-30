@@ -339,6 +339,254 @@ def gather(key: str, sport: int = 11, tournament: int | None = None,
     return games
 
 
+# ── ProphetX OFFICIAL (direct) API feed ───────────────────────────────────────
+# Same game-dict shape as gather(), but sourced from ProphetX's own Trading API
+# (prophetx_api.py sibling module) instead of OddsPapi. Advantages: no RapidAPI
+# quota, fresher prices, and FULL order-book depth per side (each outcome gains
+# a `total` = money across all levels vs `limit` = top level only). Used by the
+# dashboard's "PX Direct" view. NOTE: fixture ids here are ProphetX event ids
+# (prefixed "px"), NOT OddsPapi fixture ids — so this slate must never be mixed
+# into the Compare/Arbs joins, which key on OddsPapi ids.
+
+import re as _re
+import threading as _threading
+
+
+class ProphetXDirectError(RuntimeError):
+    """Direct ProphetX API feed unavailable (keys missing, auth, network)."""
+
+
+# UI chip id (OddsPapi tournament id) -> official ProphetX tournament name(s)
+DIRECT_CHIP_NAMES = {486: ["WNBA"], 132: ["NBA"], 15822: ["NBA Summer League"]}
+# "All" = the core basketball set; resolved by exact name, missing ones skipped.
+DIRECT_CORE = ["WNBA", "NBA", "NBA Summer League", "College Basketball",
+               "Women's College Basketball", "BIG3", "EuroLeague",
+               "Unrivaled", "EuroBasket"]
+
+DIRECT_T_TTL = 3600.0    # tournament list cache (rarely changes)
+DIRECT_EV_TTL = 300.0    # per-tournament event list cache (markets refresh often,
+                         # event lists don't — keeps polls to 1 markets call/batch)
+
+_direct: dict = {"client": None, "tournaments": (0.0, []), "events": {}}
+_direct_lock = _threading.Lock()
+
+
+def _direct_client():
+    ak = os.environ.get("PROPHETX_ACCESS_KEY")
+    sk = os.environ.get("PROPHETX_SECRET_KEY")
+    if not ak or not sk:
+        raise ProphetXDirectError(
+            "PROPHETX_ACCESS_KEY / PROPHETX_SECRET_KEY not set on the server.")
+    if _direct["client"] is None:
+        try:
+            from prophetx_api import ProphetXClient, PROD_BASE
+        except ImportError as exc:
+            raise ProphetXDirectError(f"prophetx_api.py not importable: {exc}")
+        cli = ProphetXClient(PROD_BASE, ak, sk, verbose=False)
+        try:
+            cli.login()
+        except Exception as exc:
+            raise ProphetXDirectError(f"ProphetX login failed: {exc}")
+        _direct["client"] = cli
+    return _direct["client"]
+
+
+def _direct_tournaments(cli):
+    now = time.time()
+    ts, lst = _direct["tournaments"]
+    if not lst or now - ts > DIRECT_T_TTL:
+        lst = cli.get_tournaments()
+        _direct["tournaments"] = (now, lst)
+    return lst
+
+
+def _direct_events(cli, tid):
+    now = time.time()
+    hit = _direct["events"].get(tid)
+    if hit and now - hit[0] < DIRECT_EV_TTL:
+        return hit[1]
+    evs = cli.get_sport_events(tid)
+    _direct["events"][tid] = (now, evs)
+    return evs
+
+
+def _amer_to_dec(a):
+    try:
+        a = float(a)
+    except (TypeError, ValueError):
+        return None
+    if a == 0:
+        return None
+    return round(1 + (a / 100.0 if a > 0 else 100.0 / -a), 3)
+
+
+def _direct_betslip(line_id, display_odds):
+    """Website auto-fill deep link (docs: auto-fill-integration-guide)."""
+    if not line_id:
+        return ""
+    odds = f"&odds={display_odds.lstrip('+')}" if display_odds else ""
+    return f"https://www.prophetx.co/?action=addtobetslip&line_id={line_id}{odds}"
+
+
+def _direct_line_groups(m):
+    """Yield selection groups: alt lines nest under market_lines; the parent
+    may also carry its own selections (the main line)."""
+    subs = m.get("market_lines") or []
+    if subs:
+        for s in subs:
+            if s.get("selections"):
+                yield s["selections"]
+        if m.get("selections"):
+            yield m["selections"]
+    elif m.get("selections"):
+        yield m["selections"]
+
+
+def _direct_markets(mkts, min_limit=0.0):
+    ranked = []
+    for m in mkts or []:
+        cat = m.get("category_name") or ""
+        base = m.get("display_name") or m.get("name") or ""
+        raw_type = m.get("type") or ""
+        mtype = {"moneyline": "moneyline", "spread": "spreads",
+                 "total": "totals"}.get(raw_type, raw_type)
+        sub = m.get("sub_type") or ""
+        is_prop = (cat not in ("Game Lines", "First Half")) or sub.startswith("player")
+        player = _re.split(r"\s+Total\s+", base)[0].strip() if is_prop else ""
+        cat_rank = 0 if cat == "Game Lines" else (1 if cat == "First Half" else 2)
+
+        for sels in _direct_line_groups(m):
+            outcomes = []
+            line_val = 0.0
+            for sel in sels:
+                levels = sel if isinstance(sel, list) else [sel]
+                levels = [lv for lv in levels if isinstance(lv, dict)]
+                if not levels:
+                    continue
+                lv = levels[0]
+                dec = _amer_to_dec(lv.get("odds"))
+                if dec is None:
+                    continue                       # empty rung: nothing offered
+                stake = float(lv.get("stake") or 0)
+                if stake < min_limit:
+                    continue
+                total = 0.0
+                for l2 in levels:
+                    try:
+                        total += float(l2.get("stake") or 0)
+                    except (TypeError, ValueError):
+                        pass
+                if lv.get("line") not in (None, 0):
+                    try:
+                        line_val = abs(float(lv["line"]))
+                    except (TypeError, ValueError):
+                        pass
+                label = str(lv.get("name") or lv.get("display_name") or "?")
+                outcomes.append({
+                    "sel": label[:1].upper() + label[1:],
+                    "decimal": dec,
+                    "american": int(lv["odds"]) if isinstance(lv.get("odds"), (int, float)) else None,
+                    "limit": round(stake, 2),
+                    "total": round(total, 2),
+                    "betslip": _direct_betslip(lv.get("line_id"), lv.get("display_odds") or ""),
+                })
+            if not outcomes:
+                continue
+            header = base if (mtype == "moneyline" or not line_val) else f"{base} {line_val:g}"
+            rank = (1 if is_prop else 0, cat_rank,
+                    TYPE_RANK.get(mtype, 9), player, line_val)
+            ranked.append((rank, {
+                "header": header, "is_prop": is_prop, "mtype": mtype,
+                "player": player, "line": line_val, "outcomes": outcomes,
+            }))
+    ranked.sort(key=lambda t: t[0])
+    return [mk for _, mk in ranked]
+
+
+def _direct_game(ev, mkts, tname, min_limit):
+    markets = _direct_markets(mkts, min_limit)
+    if not markets:
+        return None
+    away = home = ""
+    for c in ev.get("competitors") or []:
+        side = c.get("side")
+        nm = c.get("display_name") or c.get("name") or ""
+        if side == "away":
+            away = nm
+        elif side == "home":
+            home = nm
+    if not (away and home):
+        nm = ev.get("display_name") or ev.get("name") or ""
+        if " at " in nm:
+            away, home = nm.split(" at ", 1)
+        else:
+            away, home = nm, ""
+    start_ms = None
+    sched = ev.get("scheduled")
+    if sched:
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(str(sched).replace("Z", "+00:00"))
+            start_ms = int(dt.timestamp() * 1000)
+        except (ValueError, TypeError):
+            pass
+    status = str(ev.get("status") or "")
+    live = status.lower() in ("live", "in_progress", "inprogress")
+    return {
+        "fixture_id": f"px{ev.get('event_id')}",
+        "away": away, "home": home,
+        "game": f"{away} @ {home}" if home else away,
+        "tournament": tname,
+        "status": "Live" if live else (status.replace("_", " ").title() or "Upcoming"),
+        "live": live,
+        "start_epoch": start_ms,
+        "markets": markets,
+        "n_lines": sum(len(mk["outcomes"]) for mk in markets),
+    }
+
+
+def gather_direct(tournament: int = 0, min_limit: float = 0.0) -> list:
+    """ProphetX official-API slate in gather()'s shape. `tournament` is the UI
+    chip id (OddsPapi id: 486 WNBA / 132 NBA / 15822 Summer, 0 = all core
+    basketball); it's mapped to official tournaments by name. Serialized by a
+    lock: the client paces 1 req/s per endpoint (production base rate limit)."""
+    with _direct_lock:
+        cli = _direct_client()
+        try:
+            all_t = _direct_tournaments(cli)
+        except ProphetXDirectError:
+            raise
+        except Exception as exc:
+            raise ProphetXDirectError(f"tournament fetch failed: {exc}")
+        by_name = {(t.get("name") or "").lower(): t for t in all_t}
+        names = DIRECT_CHIP_NAMES.get(tournament, DIRECT_CORE) if tournament else DIRECT_CORE
+        wanted = [by_name[n.lower()] for n in names if n.lower() in by_name]
+
+        games = []
+        for t in wanted:
+            try:
+                evs = _direct_events(cli, t["id"])
+            except Exception:
+                continue
+            by_id = {e.get("event_id"): e for e in evs if e.get("event_id") is not None}
+            ids = list(by_id)
+            for i in range(0, len(ids), 50):
+                chunk = ids[i:i + 50]
+                try:
+                    mm = cli.get_multiple_markets(chunk)
+                except Exception:
+                    continue
+                for eid in chunk:
+                    mkts = mm.get(str(eid)) or mm.get(eid) or []
+                    if isinstance(mkts, dict):    # some responses wrap {markets: [...]}
+                        mkts = mkts.get("markets") or []
+                    g = _direct_game(by_id[eid], mkts, t.get("name", ""), min_limit)
+                    if g:
+                        games.append(g)
+        games.sort(key=lambda x: (not x["live"], x["start_epoch"] or 0))
+        return games
+
+
 def to_console(games: list, links: bool = False) -> list:
     """Print games and return flat CSV rows."""
     rows = []
