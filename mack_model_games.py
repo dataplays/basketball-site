@@ -299,6 +299,14 @@ def main():
     if _quota.get("remaining"):
         print(f"\n  Odds API credits remaining: {_quota['remaining']}")
 
+    # Grade any prior settled slates into the games tracker (local only —
+    # mack_games_track.py doesn't exist on Render, so this silently no-ops).
+    try:
+        import mack_games_track
+        mack_games_track.auto_update()
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     main()
