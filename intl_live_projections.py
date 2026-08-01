@@ -2898,6 +2898,31 @@ def api_games():
     })
 
 
+@app.route("/api/diag_leagues")
+def diag_leagues():
+    """TEMP diagnostic (remove after use): api-sports league-id lookup."""
+    from flask import request
+    if not APISPORTS_KEY:
+        return jsonify(error="APISPORTS_KEY not set")
+    league = request.args.get("league", "")
+    season = request.args.get("season", "")
+    if league and season:
+        d = _apisports_get(f"/games?league={league}&season={season}")
+        games = d.get("response") or []
+        return jsonify(n=len(games), errors=d.get("errors"), sample=[
+            {"date": g.get("date"),
+             "status": (g.get("status") or {}).get("short"),
+             "home": ((g.get("teams") or {}).get("home") or {}).get("name"),
+             "away": ((g.get("teams") or {}).get("away") or {}).get("name")}
+            for g in games[:8]])
+    country = request.args.get("country", "")
+    d = _apisports_get(f"/leagues?country={country}")
+    return jsonify(errors=d.get("errors"), leagues=[
+        {"id": lg.get("id"), "name": lg.get("name"), "type": lg.get("type"),
+         "seasons": [s.get("season") for s in (lg.get("seasons") or [])][-4:]}
+        for lg in (d.get("response") or [])])
+
+
 @app.route("/refresh")
 def refresh_ratings():
     """Trigger a fresh ratings reload in the background (non-blocking)."""
