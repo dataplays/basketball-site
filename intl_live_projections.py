@@ -975,6 +975,7 @@ APISPORTS_LEAGUES = {                 # dashboard slug -> api-sports league id
     "ar-liga-a": 18, "pl-ebl": 72, "id-ibl": 139, "do-lnb": 380,
     "mx-lnbp": 63,   # added Jul 2026 — Mexico LNBP (split season, opens Oct 8 2026)
     "cl-lnb": 114,   # added Jul 2026 — Chile LNB (label "2026-2027" = Mar-Aug 2026 season)
+    "lb-d1": 409,    # added Aug 2026 — Lebanon Division 1 (split season, ~Oct-Jun)
 }
 # Non-eurobasket leagues: games + ratings come only from api-sports (so they
 # show as games but not in the eurobasket standings section). "season" overrides
@@ -990,6 +991,7 @@ EXTRA_APISPORTS_LEAGUES = {
     "do-lnb":    {"name": "LNB (Dominican Rep.)",        "short": "DOM",    "emoji": "\U0001F1E9\U0001F1F4", "accent": "#168aad", "season": "2026",      "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
     "mx-lnbp":   {"name": "LNBP (Mexico)",               "short": "LNBP",   "emoji": "\U0001F1F2\U0001F1FD", "accent": "#43a047", "season": "2026-2027", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
     "cl-lnb":    {"name": "LNB (Chile)",                 "short": "CHI",    "emoji": "\U0001F1E8\U0001F1F1", "accent": "#1d4e89", "season": "2026-2027", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    "lb-d1":     {"name": "Division 1 (Lebanon)",        "short": "LEB",    "emoji": "\U0001F1F1\U0001F1E7", "accent": "#2d6a4f", "season": "2025-2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
 }
 APISPORTS_LIVE = {"Q1", "Q2", "Q3", "Q4", "OT", "HT", "BT", "ET"}
 APISPORTS_FINAL = {"FT", "AOT", "AET"}
@@ -2896,31 +2898,6 @@ def api_games():
         # from "league deployed but its season query returned no games"
         "apisports_configured": sorted(APISPORTS_LEAGUES),
     })
-
-
-@app.route("/api/diag_leagues")
-def diag_leagues():
-    """TEMP diagnostic (remove after use): api-sports league-id lookup."""
-    from flask import request
-    if not APISPORTS_KEY:
-        return jsonify(error="APISPORTS_KEY not set")
-    league = request.args.get("league", "")
-    season = request.args.get("season", "")
-    if league and season:
-        d = _apisports_get(f"/games?league={league}&season={season}")
-        games = d.get("response") or []
-        return jsonify(n=len(games), errors=d.get("errors"), sample=[
-            {"date": g.get("date"),
-             "status": (g.get("status") or {}).get("short"),
-             "home": ((g.get("teams") or {}).get("home") or {}).get("name"),
-             "away": ((g.get("teams") or {}).get("away") or {}).get("name")}
-            for g in games[:8]])
-    country = request.args.get("country", "")
-    d = _apisports_get(f"/leagues?country={country}")
-    return jsonify(errors=d.get("errors"), leagues=[
-        {"id": lg.get("id"), "name": lg.get("name"), "type": lg.get("type"),
-         "seasons": [s.get("season") for s in (lg.get("seasons") or [])][-4:]}
-        for lg in (d.get("response") or [])])
 
 
 @app.route("/refresh")
