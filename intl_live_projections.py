@@ -998,6 +998,22 @@ APISPORTS_FINAL = {"FT", "AOT", "AET"}
 APISPORTS_RATINGS: dict = {}          # slug -> {team_name: {ppg, oppg, pace, gp}}
 _apisports_cache: dict = {}           # slug -> (dash_games, ts, ttl)
 
+# ── Prior-season blend (added Aug 2026) ──
+# Early-season ratings lean on LAST season instead of defaulting every team to
+# league average: rating = w*current + (1-w)*prior_baseline with
+# w = gp/(gp+K), where the prior baseline is last season's rating regressed
+# PRIOR_REGRESS of the way toward that season's league mean (roster-churn
+# discount). Teams with no prior season shrink toward the CURRENT league mean.
+# The prior fetch fires only when a league actually needs it (no finals yet,
+# or some team under NEED_GP games) — so mid-season leagues skip the extra
+# call entirely. Finished seasons are immutable -> cached for days.
+APISPORTS_BLEND_K = 5.0
+APISPORTS_PRIOR_REGRESS = 0.5
+APISPORTS_PRIOR_NEED_GP = 10
+APISPORTS_PRIOR_TTL = 7 * 24 * 3600.0     # success cache
+APISPORTS_PRIOR_ERR_TTL = 600.0           # error cache (retry sooner)
+_apisports_prior_cache: dict = {}         # slug -> (ratings, fetched_ts, ttl)
+
 
 APISPORTS_LAST_ERROR = None   # last api-sports "errors" payload seen (diagnostic)
 
@@ -1050,6 +1066,85 @@ def _apisports_ratings_from(games: list) -> dict:
             ppg, oppg = pf / gp, pa / gp
             out[name] = {"ppg": round(ppg, 1), "oppg": round(oppg, 1),
                          "pace": round((ppg + oppg) / 2, 1), "gp": gp, "w": 0, "l": 0}
+    return out
+
+
+def _apisports_prev_season(season: str):
+    """'2025-2026' -> '2024-2025'; '2026' -> '2025'; None if unparseable."""
+    s = str(season).strip()
+    try:
+        if "-" in s:
+            a, b = s.split("-", 1)
+            return f"{int(a) - 1}-{int(b) - 1}"
+        return str(int(s) - 1)
+    except (ValueError, TypeError):
+        return None
+
+
+def _apisports_prior_ratings(slug: str, league_id: int) -> dict:
+    """LAST season's team ratings for a league ({} on failure). A finished
+    season never changes, so successes cache for days; errors retry sooner."""
+    now = time.monotonic()
+    hit = _apisports_prior_cache.get(slug)
+    if hit and (now - hit[1]) < hit[2]:
+        return hit[0]
+    season = (_get_league_config(slug) or {}).get("season") or APISPORTS_SEASON
+    prev = _apisports_prev_season(season)
+    ratings, ttl = {}, APISPORTS_PRIOR_ERR_TTL
+    if prev:
+        try:
+            d = _apisports_get(f"/games?league={league_id}&season={prev}")
+            if not d.get("errors"):
+                ratings = _apisports_ratings_from(d.get("response") or [])
+                ttl = APISPORTS_PRIOR_TTL
+        except Exception as e:
+            print(f"  [WARN] api-sports {slug} prior-season fetch failed: {e}",
+                  file=sys.stderr)
+    else:
+        ttl = APISPORTS_PRIOR_TTL       # unparseable season string: don't re-try hot
+    _apisports_prior_cache[slug] = (ratings, now, ttl)
+    return ratings
+
+
+def _blend_with_prior(cur: dict, prior: dict) -> dict:
+    """Sample-aware blend of current-season ratings with a regressed prior.
+
+    Includes prior-only teams (they haven't played yet this season but appear
+    in upcoming games — exactly when the prior matters most). Teams with no
+    prior shrink toward the current league mean instead of standing on a raw
+    tiny sample. w = gp/(gp+K), so by ~15 games the current season dominates."""
+    if not prior:
+        return cur
+    pavg_ppg = sum(r["ppg"] for r in prior.values()) / len(prior)
+    pavg_oppg = sum(r["oppg"] for r in prior.values()) / len(prior)
+    pavg_pace = sum(r["pace"] for r in prior.values()) / len(prior)
+    if cur:
+        cavg_ppg = sum(r["ppg"] for r in cur.values()) / len(cur)
+        cavg_oppg = sum(r["oppg"] for r in cur.values()) / len(cur)
+        cavg_pace = sum(r["pace"] for r in cur.values()) / len(cur)
+    else:
+        cavg_ppg, cavg_oppg, cavg_pace = pavg_ppg, pavg_oppg, pavg_pace
+
+    keep = 1.0 - APISPORTS_PRIOR_REGRESS
+    out = {}
+    for name in set(cur) | set(prior):
+        c, p = cur.get(name), prior.get(name)
+        if p:
+            base = (pavg_ppg + keep * (p["ppg"] - pavg_ppg),
+                    pavg_oppg + keep * (p["oppg"] - pavg_oppg),
+                    pavg_pace + keep * (p["pace"] - pavg_pace))
+        else:
+            base = (cavg_ppg, cavg_oppg, cavg_pace)
+        gp = (c or {}).get("gp", 0)
+        w = gp / (gp + APISPORTS_BLEND_K)
+        cc = c or {"ppg": base[0], "oppg": base[1], "pace": base[2]}
+        out[name] = {
+            "ppg": round(w * cc["ppg"] + (1 - w) * base[0], 1),
+            "oppg": round(w * cc["oppg"] + (1 - w) * base[1], 1),
+            "pace": round(w * cc["pace"] + (1 - w) * base[2], 1),
+            "gp": gp, "w": (c or {}).get("w", 0), "l": (c or {}).get("l", 0),
+            "prior": bool(p),
+        }
     return out
 
 
@@ -1172,7 +1267,13 @@ def fetch_apisports_league(slug: str, league_id: int) -> list[dict]:
         print(f"  [WARN] api-sports {slug} failed: {e}", file=sys.stderr)
         return c[0] if c else []
 
-    APISPORTS_RATINGS[slug] = _apisports_ratings_from(allg)
+    cur = _apisports_ratings_from(allg)
+    # Prior-season blend, only when the sample is actually thin (no finals yet,
+    # or some team under the gp threshold) — mid-season leagues skip the call.
+    need_prior = (not cur) or min((r["gp"] for r in cur.values()), default=0) < APISPORTS_PRIOR_NEED_GP
+    if need_prior:
+        cur = _blend_with_prior(cur, _apisports_prior_ratings(slug, league_id))
+    APISPORTS_RATINGS[slug] = cur
     _, base_dt = get_date_str()
     now_ts = base_dt.timestamp()
     lo, hi = now_ts - 18 * 3600, now_ts + WINDOW_HOURS * 3600
@@ -2897,6 +2998,11 @@ def api_games():
         # configured (regardless of data) — distinguishes "league not deployed"
         # from "league deployed but its season query returned no games"
         "apisports_configured": sorted(APISPORTS_LEAGUES),
+        # prior-season blend diagnostic: slug -> teams carrying a prior baseline
+        # (only leagues whose thin current sample triggered the prior fetch)
+        "apisports_prior": {slug: sum(1 for r in v.values() if r.get("prior"))
+                            for slug, v in APISPORTS_RATINGS.items()
+                            if any(r.get("prior") for r in v.values())},
     })
 
 
