@@ -335,7 +335,12 @@ def gather(key: str, sport: int = 11, tournament: int | None = None,
                 "header": market_header(meta, line, pname),
                 "is_prop": is_prop,
                 "mtype": meta.get("marketType", ""),
+                # CAREFUL: marketId encodes (stat, line) but NOT the player, so
+                # every player's "Rebounds 5.5" shares one marketId. The join
+                # key must be (market_id, player_id) or props cross-match
+                # between players.
                 "market_id": mid,
+                "player_id": pid,
                 "family": market_family(meta),
                 "player": pname,
                 "line": line,

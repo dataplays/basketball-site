@@ -213,7 +213,7 @@ def build_compare(tournament: int):
                 # group by OddsPapi market_id, NOT the display header: the
                 # header collapses period markets ('Spread' for full-game AND
                 # 1st half), which merged different markets into one row.
-                mkey = m.get("market_id")
+                mkey = _market_key(m)
                 if mkey is None:
                     continue
                 mk = markets.setdefault(mkey, {
@@ -455,6 +455,17 @@ def attach_fair(games: list, kappa: float, by_liability: bool = False) -> list:
 VALUE_MIN_EV = 0.001    # ignore sub-0.1% "edges" (rounding noise)
 
 
+def _market_key(m: dict):
+    """Cross-book identity for a market: (market_id, player_id).
+
+    market_id alone is NOT enough — OddsPapi's marketId encodes (stat, line)
+    but not the player, so every player's "Rebounds 5.5" shares one id and a
+    market_id-only join cross-matches props between players.
+    """
+    mid = m.get("market_id")
+    return None if mid is None else (mid, m.get("player_id") or 0)
+
+
 def _px_fair_index(px_games: list) -> dict:
     """fixture_id -> {(market_id, outcome_id): no-vig fair prob}.
 
@@ -468,8 +479,8 @@ def _px_fair_index(px_games: list) -> dict:
     for g in px_games:
         fair = {}
         for m in g["markets"]:
-            mid = m.get("market_id")
-            if mid is None:
+            mk = _market_key(m)
+            if mk is None:
                 continue
             inv = [(o.get("outcome_id"), 1.0 / o["decimal"]) for o in m["outcomes"]
                    if o["decimal"] > 1 and o.get("outcome_id") is not None]
@@ -477,7 +488,7 @@ def _px_fair_index(px_games: list) -> dict:
             if s <= 0 or len(inv) < 2:
                 continue
             for oid, v in inv:
-                fair[(mid, oid)] = v / s
+                fair[(mk, oid)] = v / s
         idx[g["fixture_id"]] = fair
     return idx
 
@@ -498,11 +509,11 @@ def compute_value_bets(book_games: list, px_games: list = None,
         if not fair:
             continue
         for m in bg["markets"]:
-            mid = m.get("market_id")
-            if mid is None:
+            mk = _market_key(m)
+            if mk is None:
                 continue
             for o in m["outcomes"]:
-                fp = fair.get((mid, o.get("outcome_id")))
+                fp = fair.get((mk, o.get("outcome_id")))
                 if fp is None or o["decimal"] <= 1:
                     continue
                 ev = fp * o["decimal"] - 1.0
