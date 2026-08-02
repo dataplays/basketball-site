@@ -18,7 +18,11 @@ Projection model
   If a player has already passed their projected minutes and the game is
   still going, their remaining share is extrapolated from the share of
   game time they've played so far.
-* Projected final = current + remaining_min × pregame rate.
+* Rest-of-game rate (Aug 2 2026): the pregame rate SHRUNK TOWARD the rate the
+  player is actually posting tonight — w = min_played/(min_played+K), capped
+  at RATE_MAX_W. Previously frozen at pregame, which discarded all in-game
+  evidence the books were already pricing. See blended_rate().
+* Projected final = current + remaining_min × blended rate.
 * P(over) for EV: remaining production ~ Normal(mean = remaining_min × rate,
   SD = full-game prop SD × sqrt(remaining_min / ExpMin)) — the same SD
   shapes as the /median tool (pts max(4.0,.30·m), reb max(1.8,.38·m)).
@@ -82,6 +86,21 @@ P_CLAMP = (0.03, 0.97)
 # the lateness grow.
 BLOWOUT_MIN_EXP = 22.0
 BLOWOUT_MAX_CUT = 0.45
+
+# ── Live-rate shrinkage (added Aug 2 2026) ──
+# The rest-of-game rate used to be FROZEN at the pregame projection, throwing
+# away every bit of in-game evidence (matchup working, role expanded, cold
+# night). Now it shrinks toward the observed per-minute rate by minutes played:
+#     w    = min_played / (min_played + RATE_K)
+#     rate = w*observed + (1-w)*pregame
+# K is deliberately large — short-window per-minute rates are very noisy, so
+# this is a nudge, not a handover (at 15 min played, w ~= 0.38 for points).
+# Points carry more shot-luck than rebounds, hence the larger K.
+# Tune these on inplay_tracker.csv (inplay_track.py --summary) once ~30+
+# picks have graded; do NOT tune them on intuition.
+RATE_K = {"pts": 24.0, "reb": 20.0, "pr": 22.0}
+RATE_MIN_PLAYED = 4.0       # below this, the observed rate is pure noise
+RATE_MAX_W = 0.65           # never let one live sample fully own the forecast
 
 
 def blowout_min_factor(lead: float, rem_game: float, reg_min: float,
@@ -340,6 +359,22 @@ def _sd_full(prefix: str, exp_stat: float) -> float:
                 + _sd_full("reb", exp_stat * 0.25) ** 2)
 
 
+def blended_rate(prefix: str, exp_stat: float, exp_min: float,
+                 cur_stat: float, min_played: float) -> tuple[float, float]:
+    """Rest-of-game per-minute rate: pregame shrunk toward the observed rate.
+
+    Returns (rate, w) where w is the weight actually placed on live evidence,
+    so callers can surface it. Falls back to the pure pregame rate when the
+    player has barely played."""
+    pre_rate = (exp_stat / exp_min) if exp_min > 0 else 0.0
+    if min_played < RATE_MIN_PLAYED or min_played <= 0:
+        return pre_rate, 0.0
+    obs_rate = cur_stat / min_played
+    k = RATE_K.get(prefix, 22.0)
+    w = min(RATE_MAX_W, min_played / (min_played + k))
+    return w * obs_rate + (1.0 - w) * pre_rate, w
+
+
 def remaining_minutes(exp_min: float, min_played: float,
                       elapsed: float, rem_game: float) -> float:
     """Expected minutes still to be played."""
@@ -414,7 +449,8 @@ def build_game_rows(league: str, game: dict) -> dict:
             exp_stat = exp[prefix]
             if exp_min <= 0 or exp_stat <= 0:
                 continue
-            rate = exp_stat / exp_min
+            rate, rate_w = blended_rate(prefix, exp_stat, exp_min,
+                                        cur[prefix], b["min"])
             mean_final = cur[prefix] + rem_min * rate
             if line is None:
                 continue                      # only show props with a live line
@@ -443,6 +479,7 @@ def build_game_rows(league: str, game: dict) -> dict:
                 "min": b["min"], "cur": cur[prefix],
                 "exp_min": exp_min, "exp_stat": exp_stat,
                 "rem_min": rem_min, "proj_final": mean_final,
+                "rate_w": round(rate_w * 100.0),   # % weight on live evidence
                 "line": line,
                 "over_odds": over_odds, "under_odds": under_odds,
                 "over_book": pl_lines.get(f"{prefix}_over_book", ""),
