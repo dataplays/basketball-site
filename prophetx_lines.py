@@ -224,19 +224,34 @@ def stat_from_name(name: str) -> str:
                 .strip())
 
 
+def market_family(meta: dict) -> str:
+    """Period-bearing market name WITHOUT the line ('Spread', '1st Half
+    Spread', 'Total Points', ...).
+
+    Prefer the LONGER of marketName/marketNameShort: the short name collapses
+    period markets — OddsPapi labels a full-game spread AND a 1st-half spread
+    both 'Spread' — which silently merged different markets into one row.
+    """
+    short = (meta.get("marketNameShort") or "").strip()
+    full = (meta.get("marketName") or "").strip()
+    return (full if len(full) > len(short) else short) or meta.get("marketType", "")
+
+
 def market_header(meta: dict, line: float, player: str) -> str:
     mtype = meta.get("marketType", "")
-    short = meta.get("marketNameShort") or meta.get("marketName") or mtype
+    name = market_family(meta)
     if meta.get("playerProp") and player:
-        stat = stat_from_name(meta.get("marketName") or short)
+        stat = stat_from_name(meta.get("marketName") or name)
         return f"{player} - {stat} {abs(line):g}"
     if mtype in ("moneyline", "1x2"):
-        return short
+        return name
     if "total" in mtype:
-        return f"{short} {abs(line):g}"
-    if "spread" in mtype or "handicap" in short.lower():
-        return short
-    return f"{short} {line:+g}" if line else short
+        return f"{name} {abs(line):g}"
+    # Spreads carry the line in the header too. It used to live only in the
+    # selection label, so every alt line shared the header "Spread".
+    if "spread" in mtype or "handicap" in name.lower():
+        return f"{name} {line:+g}" if line else name
+    return f"{name} {line:+g}" if line else name
 
 
 def selection_label(outcome: dict, meta: dict, out_name: dict,
@@ -310,11 +325,18 @@ def gather(key: str, sport: int = 11, tournament: int | None = None,
                 "american": o.get("priceAmerican"),
                 "limit": round(o.get("limit") or 0, 2),
                 "betslip": o.get("betslip", ""),
+                # OddsPapi's own ids — the ONLY reliable cross-book join. Two
+                # prices sharing (market_id, outcome_id) are the same market,
+                # same period, same line, by construction. Display strings are
+                # not: 'Spread' collapses full-game and period markets.
+                "outcome_id": o.get("outcomeId"),
             } for o in sorted(gouts, key=lambda o: -(o.get("limit") or 0))]
             ranked.append((rank, {
                 "header": market_header(meta, line, pname),
                 "is_prop": is_prop,
                 "mtype": meta.get("marketType", ""),
+                "market_id": mid,
+                "family": market_family(meta),
                 "player": pname,
                 "line": line,
                 "outcomes": outcomes,

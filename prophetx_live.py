@@ -210,11 +210,19 @@ def build_compare(tournament: int):
                 continue
             n_books += 1
             for m in g["markets"]:
-                mk = markets.setdefault(m["header"], {
+                # group by OddsPapi market_id, NOT the display header: the
+                # header collapses period markets ('Spread' for full-game AND
+                # 1st half), which merged different markets into one row.
+                mkey = m.get("market_id")
+                if mkey is None:
+                    continue
+                mk = markets.setdefault(mkey, {
                     "header": m["header"], "is_prop": bool(m.get("is_prop")),
                     "mtype": m.get("mtype", ""), "sides": {}})
                 for o in m["outcomes"]:
-                    mk["sides"].setdefault(o["sel"], {})[slug] = {
+                    okey = o.get("outcome_id", o["sel"])
+                    side = mk["sides"].setdefault(okey, {"sel": o["sel"], "px": {}})
+                    side["px"][slug] = {
                         "american": o.get("american"), "decimal": o["decimal"],
                         "limit": o["limit"], "betslip": o.get("betslip", "")}
         if n_books < 2:
@@ -223,11 +231,12 @@ def build_compare(tournament: int):
         groups = []
         for mk in markets.values():
             sides = []
-            for sel, prices in mk["sides"].items():
+            for _okey, sinfo in mk["sides"].items():
+                prices = sinfo["px"]
                 if len(prices) < 2:                 # need 2+ books to compare a price
                     continue
                 best = max(prices, key=lambda s: prices[s]["decimal"])
-                sides.append({"sel": sel, "prices": prices, "best": best})
+                sides.append({"sel": sinfo["sel"], "prices": prices, "best": best})
             if not sides:
                 continue
             sides.sort(key=lambda s: s["sel"])
@@ -289,7 +298,7 @@ def _fixture_opps(rows: list) -> list:
         dec = o.get("decimal") or 0
         if dec <= 1.0:
             continue
-        if stat == "ml":
+        if stat == "ml" or stat.startswith("ml::"):
             cur = ml_best.get(o["sel"])
             if cur is None or dec > cur[1]["decimal"]:
                 ml_best[o["sel"]] = (book, o)
@@ -321,8 +330,13 @@ def _fixture_opps(rows: list) -> list:
         if 1.0 / oa["decimal"] + 1.0 / ob["decimal"] < 1.0:
             add("arb", "moneyline", None, None, ba, oa, bb, ob)
 
-    # Totals & spreads: pair every '>' side with every '<' side
-    for stat in ("total", "spread"):
+    # Totals & spreads: pair every '>' side with every '<' side, WITHIN one
+    # market family only (stat carries it as "spread::1st Half Spread").
+    # Iterate the families actually present rather than a fixed ("total",
+    # "spread") tuple, so period markets each get their own pass.
+    fams = {s for (s, _t) in gt_best} | {s for (s, _t) in lt_best}
+    for stat in sorted(fams):
+        label = stat.split("::", 1)[-1] if "::" in stat else stat
         gts = sorted((thr, bk, o) for (s, thr), (bk, o) in gt_best.items() if s == stat)
         lts = sorted((thr, bk, o) for (s, thr), (bk, o) in lt_best.items() if s == stat)
         for lo_thr, gbk, go in gts:
@@ -332,10 +346,10 @@ def _fixture_opps(rows: list) -> list:
                 inv = 1.0 / go["decimal"] + 1.0 / lo_o["decimal"]
                 if hi_thr == lo_thr:
                     if inv < 1.0:      # same line, opposite sides -> arb
-                        add("arb", stat, lo_thr, None, gbk, go, lbk, lo_o)
+                        add("arb", label, lo_thr, None, gbk, go, lbk, lo_o)
                 elif inv < 1.0 or ((inv - 1.0) <= MIDDLE_MAX_COST
                                    and (hi_thr - lo_thr) >= MIDDLE_MIN_WIDTH):
-                    add("middle", stat, None, (lo_thr, hi_thr), gbk, go, lbk, lo_o)
+                    add("middle", label, None, (lo_thr, hi_thr), gbk, go, lbk, lo_o)
     return opps
 
 
@@ -368,9 +382,13 @@ def compute_arbs_middles(tournament: int):
                 mt, outs = m.get("mtype", ""), m["outcomes"]
                 if len(outs) != 2:
                     continue
+                # Bucket by market FAMILY so period markets never mix: a
+                # 1st-half spread and a full-game spread at the same number
+                # are different bets, and pairing them faked arbs/middles.
+                fam = m.get("family") or m.get("mtype", "")
                 if mt in ("moneyline", "1x2"):
                     for o in outs:
-                        rows.append(("ml", None, None, slug, o))
+                        rows.append((f"ml::{fam}", None, None, slug, o))
                 elif "total" in mt:
                     L = _fnum(m.get("line"))
                     if L is None:
@@ -379,7 +397,7 @@ def compute_arbs_middles(tournament: int):
                         s = (o["sel"] or "").lower()
                         d = ">" if s.startswith("over") else ("<" if s.startswith("under") else None)
                         if d:
-                            rows.append(("total", d, L, slug, o))
+                            rows.append((f"total::{fam}", d, L, slug, o))
                 elif "spread" in mt:
                     L = _fnum(m.get("line"))
                     if L is None:
@@ -388,8 +406,8 @@ def compute_arbs_middles(tournament: int):
                     ho = next((o for o in outs if home and home in (o["sel"] or "").lower()), None)
                     ao = next((o for o in outs if o is not ho), None)
                     if ho and ao:
-                        rows.append(("spread", ">", thr, slug, ho))    # home covers if margin > thr
-                        rows.append(("spread", "<", thr, slug, ao))    # away covers if margin < thr
+                        rows.append((f"spread::{fam}", ">", thr, slug, ho))   # home covers if margin > thr
+                        rows.append((f"spread::{fam}", "<", thr, slug, ao))   # away covers if margin < thr
         opps = _fixture_opps(rows)
         if not opps:
             continue
@@ -438,18 +456,28 @@ VALUE_MIN_EV = 0.001    # ignore sub-0.1% "edges" (rounding noise)
 
 
 def _px_fair_index(px_games: list) -> dict:
-    """fixture_id -> {(header, sel): no-vig fair prob} from ProphetX 2-way markets."""
+    """fixture_id -> {(market_id, outcome_id): no-vig fair prob}.
+
+    Keyed on OddsPapi's ids, NOT display strings. Matching on (header, sel)
+    used to pair a book's full-game alt spread with ProphetX's SAME-LABELLED
+    but different market — OddsPapi calls a 1st-half spread 'Spread' too — so
+    e.g. theScore's full-game Toronto +7.5 (+200) got scored against
+    ProphetX's 1st-half +7.5 (~even), inventing a ~50% edge.
+    """
     idx = {}
     for g in px_games:
         fair = {}
         for m in g["markets"]:
-            inv = [(o["sel"], 1.0 / o["decimal"]) for o in m["outcomes"]
-                   if o["decimal"] > 1]
+            mid = m.get("market_id")
+            if mid is None:
+                continue
+            inv = [(o.get("outcome_id"), 1.0 / o["decimal"]) for o in m["outcomes"]
+                   if o["decimal"] > 1 and o.get("outcome_id") is not None]
             s = sum(v for _, v in inv)
             if s <= 0 or len(inv) < 2:
                 continue
-            for sel, v in inv:
-                fair[(m["header"], sel)] = v / s
+            for oid, v in inv:
+                fair[(mid, oid)] = v / s
         idx[g["fixture_id"]] = fair
     return idx
 
@@ -470,8 +498,11 @@ def compute_value_bets(book_games: list, px_games: list = None,
         if not fair:
             continue
         for m in bg["markets"]:
+            mid = m.get("market_id")
+            if mid is None:
+                continue
             for o in m["outcomes"]:
-                fp = fair.get((m["header"], o["sel"]))
+                fp = fair.get((mid, o.get("outcome_id")))
                 if fp is None or o["decimal"] <= 1:
                     continue
                 ev = fp * o["decimal"] - 1.0
