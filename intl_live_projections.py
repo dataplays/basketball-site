@@ -3015,14 +3015,20 @@ def diag_leagues():
     league, season = request.args.get("league", ""), request.args.get("season", "")
     if league and season:
         d = _apisports_get(f"/games?league={league}&season={season}")
-        games = d.get("response") or []
-        return jsonify(n=len(games), errors=d.get("errors"), sample=[
-            {"date": g.get("date"),
-             "status": (g.get("status") or {}).get("short"),
-             "stage": g.get("stage"), "week": g.get("week"),
-             "home": ((g.get("teams") or {}).get("home") or {}).get("name"),
-             "away": ((g.get("teams") or {}).get("away") or {}).get("name")}
-            for g in games[:10]])
+        games = sorted(d.get("response") or [], key=lambda g: g.get("date") or "")
+        counts = {}
+        for g in games:
+            s = (g.get("status") or {}).get("short")
+            counts[s] = counts.get(s, 0) + 1
+        brief = lambda g: {
+            "date": (g.get("date") or "")[:16],
+            "status": (g.get("status") or {}).get("short"),
+            "home": ((g.get("teams") or {}).get("home") or {}).get("name"),
+            "away": ((g.get("teams") or {}).get("away") or {}).get("name")}
+        return jsonify(n=len(games), errors=d.get("errors"), status_counts=counts,
+                       first=(games[0].get("date") if games else None),
+                       last=(games[-1].get("date") if games else None),
+                       tail=[brief(g) for g in games[-6:]])
     d = _apisports_get(f"/leagues?country={request.args.get('country', '')}")
     return jsonify(errors=d.get("errors"), leagues=[
         {"id": lg.get("id"), "name": lg.get("name"), "type": lg.get("type"),
