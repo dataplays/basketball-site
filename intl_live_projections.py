@@ -3024,11 +3024,19 @@ def diag_leagues():
             "date": (g.get("date") or "")[:16],
             "status": (g.get("status") or {}).get("short"),
             "home": ((g.get("teams") or {}).get("home") or {}).get("name"),
-            "away": ((g.get("teams") or {}).get("away") or {}).get("name")}
+            "away": ((g.get("teams") or {}).get("away") or {}).get("name"),
+            "score": f"{((g.get('scores') or {}).get('away') or {}).get('total')}"
+                     f"-{((g.get('scores') or {}).get('home') or {}).get('total')}"}
+        tot = [((g.get('scores') or {}).get('away') or {}).get('total', 0)
+               + ((g.get('scores') or {}).get('home') or {}).get('total', 0)
+               for g in games if (g.get("status") or {}).get("short") == "FT"
+               and ((g.get('scores') or {}).get('home') or {}).get('total')]
         return jsonify(n=len(games), errors=d.get("errors"), status_counts=counts,
                        first=(games[0].get("date") if games else None),
                        last=(games[-1].get("date") if games else None),
-                       tail=[brief(g) for g in games[-6:]])
+                       avg_total=(round(sum(tot) / len(tot), 1) if tot else None),
+                       n_scored=len(tot),
+                       tail=[brief(g) for g in games[-4:]])
     d = _apisports_get(f"/leagues?country={request.args.get('country', '')}")
     return jsonify(errors=d.get("errors"), leagues=[
         {"id": lg.get("id"), "name": lg.get("name"), "type": lg.get("type"),
