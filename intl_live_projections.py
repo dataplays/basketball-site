@@ -976,6 +976,13 @@ APISPORTS_LEAGUES = {                 # dashboard slug -> api-sports league id
     "mx-lnbp": 63,   # added Jul 2026 — Mexico LNBP (split season, opens Oct 8 2026)
     "cl-lnb": 114,   # added Jul 2026 — Chile LNB (label "2026-2027" = Mar-Aug 2026 season)
     "lb-d1": 409,    # added Aug 2026 — Lebanon Division 1 (split season, ~Oct-Jun)
+    # Philippine PBA — api-sports models each CONFERENCE as its own league, and
+    # they rotate through the year, so all three are configured; only one is
+    # ever in season. NOTE the season labels LAG the calendar year the games
+    # are actually played (Governors'/Commissioner's "2025" = played 2026).
+    "ph-pba-phil": 151,   # Philippine Cup    ~Oct-Feb  (season "YYYY-YYYY")
+    "ph-pba-comm": 153,   # Commissioner's Cup ~Mar-Jun (season "YYYY")
+    "ph-pba-gov": 152,    # Governors' Cup     ~Jul-Oct (season "YYYY")
 }
 # Non-eurobasket leagues: games + ratings come only from api-sports (so they
 # show as games but not in the eurobasket standings section). "season" overrides
@@ -992,6 +999,13 @@ EXTRA_APISPORTS_LEAGUES = {
     "mx-lnbp":   {"name": "LNBP (Mexico)",               "short": "LNBP",   "emoji": "\U0001F1F2\U0001F1FD", "accent": "#43a047", "season": "2026-2027", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
     "cl-lnb":    {"name": "LNB (Chile)",                 "short": "CHI",    "emoji": "\U0001F1E8\U0001F1F1", "accent": "#1d4e89", "season": "2026-2027", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
     "lb-d1":     {"name": "Division 1 (Lebanon)",        "short": "LEB",    "emoji": "\U0001F1F1\U0001F1E7", "accent": "#2d6a4f", "season": "2025-2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 3.5},
+    # PBA: 4 x 12-min quarters = 48-MINUTE games, not the FIBA 40 (verified from
+    # the feed: avg combined total 204-207 vs MPBL's 169.6 on 40 min). HCA is
+    # deliberately ~0: PBA conferences are played at a few SHARED Manila venues
+    # (Araneta / MOA / PhilSports), so "home" is a nominal label, not an arena.
+    "ph-pba-phil": {"name": "PBA Philippine Cup",        "short": "PBA PC", "emoji": "\U0001F1F5\U0001F1ED", "accent": "#f77f00", "season": "2025-2026", "reg_min": 48.0, "qtr_min": 12.0, "ot_min": 5.0, "hca": 1.0},
+    "ph-pba-comm": {"name": "PBA Commissioner's Cup",    "short": "PBA CC", "emoji": "\U0001F1F5\U0001F1ED", "accent": "#7209b7", "season": "2025",      "reg_min": 48.0, "qtr_min": 12.0, "ot_min": 5.0, "hca": 1.0},
+    "ph-pba-gov":  {"name": "PBA Governors' Cup",        "short": "PBA GC", "emoji": "\U0001F1F5\U0001F1ED", "accent": "#c9184a", "season": "2025",      "reg_min": 48.0, "qtr_min": 12.0, "ot_min": 5.0, "hca": 1.0},
 }
 APISPORTS_LIVE = {"Q1", "Q2", "Q3", "Q4", "OT", "HT", "BT", "ET"}
 APISPORTS_FINAL = {"FT", "AOT", "AET"}
@@ -3004,44 +3018,6 @@ def api_games():
                             for slug, v in APISPORTS_RATINGS.items()
                             if any(r.get("prior") for r in v.values())},
     })
-
-
-@app.route("/api/diag_leagues")
-def diag_leagues():
-    """TEMP diagnostic (remove after use): api-sports league lookup."""
-    from flask import request
-    if not APISPORTS_KEY:
-        return jsonify(error="APISPORTS_KEY not set")
-    league, season = request.args.get("league", ""), request.args.get("season", "")
-    if league and season:
-        d = _apisports_get(f"/games?league={league}&season={season}")
-        games = sorted(d.get("response") or [], key=lambda g: g.get("date") or "")
-        counts = {}
-        for g in games:
-            s = (g.get("status") or {}).get("short")
-            counts[s] = counts.get(s, 0) + 1
-        brief = lambda g: {
-            "date": (g.get("date") or "")[:16],
-            "status": (g.get("status") or {}).get("short"),
-            "home": ((g.get("teams") or {}).get("home") or {}).get("name"),
-            "away": ((g.get("teams") or {}).get("away") or {}).get("name"),
-            "score": f"{((g.get('scores') or {}).get('away') or {}).get('total')}"
-                     f"-{((g.get('scores') or {}).get('home') or {}).get('total')}"}
-        tot = [((g.get('scores') or {}).get('away') or {}).get('total', 0)
-               + ((g.get('scores') or {}).get('home') or {}).get('total', 0)
-               for g in games if (g.get("status") or {}).get("short") == "FT"
-               and ((g.get('scores') or {}).get('home') or {}).get('total')]
-        return jsonify(n=len(games), errors=d.get("errors"), status_counts=counts,
-                       first=(games[0].get("date") if games else None),
-                       last=(games[-1].get("date") if games else None),
-                       avg_total=(round(sum(tot) / len(tot), 1) if tot else None),
-                       n_scored=len(tot),
-                       tail=[brief(g) for g in games[-4:]])
-    d = _apisports_get(f"/leagues?country={request.args.get('country', '')}")
-    return jsonify(errors=d.get("errors"), leagues=[
-        {"id": lg.get("id"), "name": lg.get("name"), "type": lg.get("type"),
-         "seasons": [s.get("season") for s in (lg.get("seasons") or [])][-5:]}
-        for lg in (d.get("response") or [])])
 
 
 @app.route("/refresh")
