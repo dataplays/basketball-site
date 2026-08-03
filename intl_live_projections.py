@@ -983,7 +983,27 @@ APISPORTS_LEAGUES = {                 # dashboard slug -> api-sports league id
     "ph-pba-phil": 151,   # Philippine Cup    ~Oct-Feb  (season "YYYY-YYYY")
     "ph-pba-comm": 153,   # Commissioner's Cup ~Mar-Jun (season "YYYY")
     "ph-pba-gov": 152,    # Governors' Cup     ~Jul-Oct (season "YYYY")
+    # ── FIBA national-team competitions (own /fiba tab, see FIBA_SLUGS) ──
+    # api-sports has NO separate "qualifiers" leagues: qualifying windows live
+    # INSIDE the championship's season (World Cup "2027" = 454 games from Feb
+    # 2024 through Mar 2027, i.e. the whole qualifying cycle + the finals).
+    "fiba-wc": 281,            # World Cup 2027 cycle (qualifiers now)
+    "fiba-wc-w": 284,          # Women's World Cup 2026 (Sept 2026)
+    "fiba-eurobasket": 197,    # EuroBasket 2029 cycle
+    "fiba-eurobasket-w": 331,  # Women's EuroBasket
+    "fiba-asiacup": 301,       # Asia Cup
+    "fiba-asiacup-w": 310,     # Women's Asia Cup
+    "fiba-olympics": 192,      # Olympic Games 2028
+    "fiba-olympics-w": 193,    # Olympic Games Women 2028
+    "fiba-friendly": 205,      # senior national-team friendlies
+    "fiba-friendly-w": 290,
 }
+
+# Competitions shown on the dedicated /fiba tab (and EXCLUDED from /intl, the
+# same display-only split used for Summer League).
+FIBA_SLUGS = {"fiba-wc", "fiba-wc-w", "fiba-eurobasket", "fiba-eurobasket-w",
+              "fiba-asiacup", "fiba-asiacup-w", "fiba-olympics",
+              "fiba-olympics-w", "fiba-friendly", "fiba-friendly-w"}
 # Non-eurobasket leagues: games + ratings come only from api-sports (so they
 # show as games but not in the eurobasket standings section). "season" overrides
 # the default for leagues that run on a calendar year ("2026") vs a split season.
@@ -1006,6 +1026,25 @@ EXTRA_APISPORTS_LEAGUES = {
     "ph-pba-phil": {"name": "PBA Philippine Cup",        "short": "PBA PC", "emoji": "\U0001F1F5\U0001F1ED", "accent": "#f77f00", "season": "2025-2026", "reg_min": 48.0, "qtr_min": 12.0, "ot_min": 5.0, "hca": 1.0},
     "ph-pba-comm": {"name": "PBA Commissioner's Cup",    "short": "PBA CC", "emoji": "\U0001F1F5\U0001F1ED", "accent": "#7209b7", "season": "2025",      "reg_min": 48.0, "qtr_min": 12.0, "ot_min": 5.0, "hca": 1.0},
     "ph-pba-gov":  {"name": "PBA Governors' Cup",        "short": "PBA GC", "emoji": "\U0001F1F5\U0001F1ED", "accent": "#c9184a", "season": "2025",      "reg_min": 48.0, "qtr_min": 12.0, "ot_min": 5.0, "hca": 1.0},
+    # FIBA national teams — standard 40-min FIBA game (verified: avg combined
+    # total 142-159 across these feeds). HCA differs by FORMAT, not by league:
+    #   * qualifier-heavy cycles (World Cup / EuroBasket) are home-and-away  -> 2.5
+    #   * single-host tournaments (Asia Cup, Olympics) are neutral           -> 0.0
+    #   * friendlies are usually hosted by one side                          -> 2.0
+    # Ratings self-compute from each competition's own finals; national-team
+    # samples are SHORT, so early-tournament numbers lean on league average
+    # (the prior-season blend rarely helps here — a biennial event has no
+    # "year-1" season to fall back on).
+    "fiba-wc":           {"name": "FIBA World Cup (+ qualifiers)",   "short": "FIBA WC",  "emoji": "\U0001F3C6", "accent": "#1d4ed8", "season": "2027", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 2.5},
+    "fiba-wc-w":         {"name": "FIBA World Cup Women",            "short": "FIBA WCW", "emoji": "\U0001F3C6", "accent": "#be185d", "season": "2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 2.5},
+    "fiba-eurobasket":   {"name": "EuroBasket (+ qualifiers)",       "short": "EUROBKT",  "emoji": "\U0001F1EA\U0001F1FA", "accent": "#0369a1", "season": "2029", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 2.5},
+    "fiba-eurobasket-w": {"name": "EuroBasket Women",                "short": "EUROBKTW", "emoji": "\U0001F1EA\U0001F1FA", "accent": "#db2777", "season": "2025", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 2.5},
+    "fiba-asiacup":      {"name": "FIBA Asia Cup",                   "short": "ASIA CUP", "emoji": "\U0001F30F", "accent": "#ea580c", "season": "2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 0.0},
+    "fiba-asiacup-w":    {"name": "FIBA Asia Cup Women",             "short": "ASIACUPW", "emoji": "\U0001F30F", "accent": "#f97316", "season": "2025", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 0.0},
+    "fiba-olympics":     {"name": "Olympic Games",                   "short": "OLYMPIC",  "emoji": "\U0001F5FD", "accent": "#65a30d", "season": "2028", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 0.0},
+    "fiba-olympics-w":   {"name": "Olympic Games Women",             "short": "OLYMPICW", "emoji": "\U0001F5FD", "accent": "#84cc16", "season": "2028", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 0.0},
+    "fiba-friendly":     {"name": "International Friendlies",        "short": "FRIENDLY", "emoji": "\U0001F91D", "accent": "#6b7280", "season": "2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 2.0},
+    "fiba-friendly-w":   {"name": "International Friendlies Women",  "short": "FRIENDLYW","emoji": "\U0001F91D", "accent": "#9ca3af", "season": "2026", "reg_min": 40.0, "qtr_min": 10.0, "ot_min": 5.0, "hca": 2.0},
 }
 APISPORTS_LIVE = {"Q1", "Q2", "Q3", "Q4", "OT", "HT", "BT", "ET"}
 APISPORTS_FINAL = {"FT", "AOT", "AET"}
@@ -2852,7 +2891,8 @@ def fetch_and_project(only=None, exclude=None) -> tuple[list[dict], list[dict], 
 
     `only`/`exclude` (sets of league_slug) scope which leagues are shown. The
     underlying scoreboard fetch is shared/cached, so /intl (exclude=SUMMER_SLUGS)
-    and /summer (only=SUMMER_SLUGS) both read a single fetch.
+    and /summer (only=SUMMER_SLUGS) both read a single fetch. /fiba does the
+    same with FIBA_SLUGS.
     """
     _, dt = get_date_str()
     date_display = dt.strftime("%A, %B ") + str(dt.day) + dt.strftime(", %Y")
@@ -2965,7 +3005,7 @@ def _build_euro_league_display() -> list[dict]:
 def index():
     ensure_ratings_loading()
 
-    live, upcoming, completed, date_display, error, league_summary, league_count = fetch_and_project(exclude=SUMMER_SLUGS)
+    live, upcoming, completed, date_display, error, league_summary, league_count = fetch_and_project(exclude=SUMMER_SLUGS | FIBA_SLUGS)
     euro_leagues = _build_euro_league_display()
 
     return _render_with_partials(
@@ -2993,7 +3033,7 @@ def index():
 def api_games():
     ensure_ratings_loading()
 
-    live, upcoming, completed, _, error, _, _ = fetch_and_project(exclude=SUMMER_SLUGS)
+    live, upcoming, completed, _, error, _, _ = fetch_and_project(exclude=SUMMER_SLUGS | FIBA_SLUGS)
 
     return jsonify({
         "live_html": render_template_string(LIVE_PARTIAL, games=live),
@@ -3018,46 +3058,6 @@ def api_games():
                             for slug, v in APISPORTS_RATINGS.items()
                             if any(r.get("prior") for r in v.values())},
     })
-
-
-@app.route("/api/diag_leagues")
-def diag_leagues():
-    """TEMP diagnostic (remove after use): api-sports league lookup."""
-    from flask import request
-    if not APISPORTS_KEY:
-        return jsonify(error="APISPORTS_KEY not set")
-    league, season = request.args.get("league", ""), request.args.get("season", "")
-    if league and season:
-        d = _apisports_get(f"/games?league={league}&season={season}")
-        games = sorted(d.get("response") or [], key=lambda g: g.get("date") or "")
-        counts = {}
-        for g in games:
-            s = (g.get("status") or {}).get("short")
-            counts[s] = counts.get(s, 0) + 1
-        tot = [((g.get('scores') or {}).get('away') or {}).get('total', 0)
-               + ((g.get('scores') or {}).get('home') or {}).get('total', 0)
-               for g in games if (g.get("status") or {}).get("short") == "FT"
-               and ((g.get('scores') or {}).get('home') or {}).get('total')]
-        return jsonify(n=len(games), errors=d.get("errors"), status_counts=counts,
-                       first=(games[0].get("date") if games else None),
-                       last=(games[-1].get("date") if games else None),
-                       avg_total=(round(sum(tot) / len(tot), 1) if tot else None),
-                       sample=[{"date": (g.get("date") or "")[:16],
-                                "status": (g.get("status") or {}).get("short"),
-                                "home": ((g.get("teams") or {}).get("home") or {}).get("name"),
-                                "away": ((g.get("teams") or {}).get("away") or {}).get("name")}
-                               for g in games[:6]])
-    q = []
-    if request.args.get("country"):
-        q.append(f"country={request.args['country']}")
-    if request.args.get("search"):
-        q.append(f"search={request.args['search']}")
-    d = _apisports_get("/leagues" + ("?" + "&".join(q) if q else ""))
-    return jsonify(errors=d.get("errors"), n=len(d.get("response") or []), leagues=[
-        {"id": lg.get("id"), "name": lg.get("name"), "type": lg.get("type"),
-         "country": (lg.get("country") or {}).get("name"),
-         "seasons": sorted(str(s.get("season")) for s in (lg.get("seasons") or []))[-4:]}
-        for lg in (d.get("response") or [])])
 
 
 @app.route("/refresh")
