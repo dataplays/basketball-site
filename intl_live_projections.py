@@ -3060,48 +3060,6 @@ def api_games():
     })
 
 
-@app.route("/api/diag_leagues")
-def diag_leagues():
-    """TEMP diagnostic (remove after use): api-sports league/season lookup."""
-    from flask import request
-    if not APISPORTS_KEY:
-        return jsonify(error="APISPORTS_KEY not set")
-    league, season = request.args.get("league", ""), request.args.get("season", "")
-    if league and season:
-        d = _apisports_get(f"/games?league={league}&season={season}")
-        games = sorted(d.get("response") or [], key=lambda g: g.get("date") or "")
-        counts = {}
-        for g in games:
-            s = (g.get("status") or {}).get("short")
-            counts[s] = counts.get(s, 0) + 1
-        near = [g for g in games if (g.get("date") or "") >= "2026-07-20"]
-        return jsonify(n=len(games), errors=d.get("errors"), status_counts=counts,
-                       first=(games[0].get("date") if games else None),
-                       last=(games[-1].get("date") if games else None),
-                       n_recent=len(near),
-                       recent=[{"date": (g.get("date") or "")[:16],
-                                "status": (g.get("status") or {}).get("short"),
-                                "home": ((g.get("teams") or {}).get("home") or {}).get("name"),
-                                "away": ((g.get("teams") or {}).get("away") or {}).get("name")}
-                               for g in near[:10]])
-    if request.args.get("league"):
-        d = _apisports_get(f"/leagues?id={request.args['league']}")
-        return jsonify(leagues=[{"id": lg.get("id"), "name": lg.get("name"),
-                                 "seasons": sorted(str(s.get("season"))
-                                                   for s in (lg.get("seasons") or []))}
-                                for lg in (d.get("response") or [])])
-    q = []
-    for k in ("country", "search"):
-        if request.args.get(k):
-            q.append(f"{k}={request.args[k]}")
-    d = _apisports_get("/leagues" + ("?" + "&".join(q) if q else ""))
-    return jsonify(errors=d.get("errors"), n=len(d.get("response") or []), leagues=[
-        {"id": lg.get("id"), "name": lg.get("name"),
-         "country": (lg.get("country") or {}).get("name"),
-         "seasons": sorted(str(s.get("season")) for s in (lg.get("seasons") or []))}
-        for lg in (d.get("response") or [])])
-
-
 @app.route("/refresh")
 def refresh_ratings():
     """Trigger a fresh ratings reload in the background (non-blocking)."""
