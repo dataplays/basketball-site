@@ -3020,6 +3020,46 @@ def api_games():
     })
 
 
+@app.route("/api/diag_leagues")
+def diag_leagues():
+    """TEMP diagnostic (remove after use): api-sports league lookup."""
+    from flask import request
+    if not APISPORTS_KEY:
+        return jsonify(error="APISPORTS_KEY not set")
+    league, season = request.args.get("league", ""), request.args.get("season", "")
+    if league and season:
+        d = _apisports_get(f"/games?league={league}&season={season}")
+        games = sorted(d.get("response") or [], key=lambda g: g.get("date") or "")
+        counts = {}
+        for g in games:
+            s = (g.get("status") or {}).get("short")
+            counts[s] = counts.get(s, 0) + 1
+        tot = [((g.get('scores') or {}).get('away') or {}).get('total', 0)
+               + ((g.get('scores') or {}).get('home') or {}).get('total', 0)
+               for g in games if (g.get("status") or {}).get("short") == "FT"
+               and ((g.get('scores') or {}).get('home') or {}).get('total')]
+        return jsonify(n=len(games), errors=d.get("errors"), status_counts=counts,
+                       first=(games[0].get("date") if games else None),
+                       last=(games[-1].get("date") if games else None),
+                       avg_total=(round(sum(tot) / len(tot), 1) if tot else None),
+                       sample=[{"date": (g.get("date") or "")[:16],
+                                "status": (g.get("status") or {}).get("short"),
+                                "home": ((g.get("teams") or {}).get("home") or {}).get("name"),
+                                "away": ((g.get("teams") or {}).get("away") or {}).get("name")}
+                               for g in games[:6]])
+    q = []
+    if request.args.get("country"):
+        q.append(f"country={request.args['country']}")
+    if request.args.get("search"):
+        q.append(f"search={request.args['search']}")
+    d = _apisports_get("/leagues" + ("?" + "&".join(q) if q else ""))
+    return jsonify(errors=d.get("errors"), n=len(d.get("response") or []), leagues=[
+        {"id": lg.get("id"), "name": lg.get("name"), "type": lg.get("type"),
+         "country": (lg.get("country") or {}).get("name"),
+         "seasons": sorted(str(s.get("season")) for s in (lg.get("seasons") or []))[-4:]}
+        for lg in (d.get("response") or [])])
+
+
 @app.route("/refresh")
 def refresh_ratings():
     """Trigger a fresh ratings reload in the background (non-blocking)."""
