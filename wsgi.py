@@ -448,6 +448,16 @@ def diag_espn():
         ("E default urllib UA", f"https://site.api.espn.com{sb}", {}),
         ("F sports.core.api", "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba/events?limit=3",
          {"User-Agent": full_ua}),
+        ("G custom honest UA", f"https://site.api.espn.com{sb}",
+         {"User-Agent": "basketball-dashboards/1.0"}),
+        ("H summary custom UA", "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/summary?event=401736283",
+         {"User-Agent": "basketball-dashboards/1.0"}),
+        ("I injuries custom UA", "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/injuries",
+         {"User-Agent": "basketball-dashboards/1.0"}),
+        ("J teams custom UA", "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/teams?limit=50",
+         {"User-Agent": "basketball-dashboards/1.0"}),
+        ("K gamelog web-api custom", "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba/athletes/4433403/gamelog?season=2026&seasontype=2",
+         {"User-Agent": "basketball-dashboards/1.0"}),
     ]
     out = []
     for label, url, headers in variants:
