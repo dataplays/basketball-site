@@ -63,7 +63,7 @@ else:
     DATA_DIR = Path(__file__).resolve().parent / "data"
 RATINGS_CSV = DATA_DIR / "wnba_ratings_2026.csv"
 
-ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba"
+ESPN = "https://site.web.api.espn.com/apis/site/v2/sports/basketball/wnba"
 UA = {"User-Agent": "Mozilla/5.0"}
 
 # ── Tunable model constants ───────────────────────────────────────────────────

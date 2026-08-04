@@ -34,7 +34,7 @@ PACE_CSV = (Path(os.environ.get("BBALL_DATA_DIR", str(Path(__file__).resolve().p
 ET = ZoneInfo("America/New_York")
 
 ESPN_API = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/"
     "mens-college-basketball/scoreboard"
 )
 WN_OE_URL = "https://www.warrennolan.com/basketball/2026/stats-adv-offensive-rating"
@@ -433,7 +433,7 @@ def fetch_live_scoreboard(date_str: str) -> list[dict]:
 # ── Game detail / foul tracking ──
 
 ESPN_SUMMARY = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/"
     "mens-college-basketball/summary"
 )
 

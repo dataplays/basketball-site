@@ -40,7 +40,7 @@ except Exception:  # noqa: BLE001
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
-ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball"
+ESPN_BASE = "https://site.web.api.espn.com/apis/site/v2/sports/basketball"
 WNBA_REPORTS = "https://www.wnba.com/api/injury-reports"
 WNBA_PAGE = "https://www.wnba.com/wnba-injury-report"
 

@@ -48,10 +48,10 @@ RATINGS_CSV = Path(r"C:\Users\User\Documents\wnba_ratings_2026.csv")
 ET = ZoneInfo("America/New_York")
 
 ESPN_API = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/wnba/scoreboard"
 )
 ESPN_SUMMARY = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/summary"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/wnba/summary"
 )
 # B-Ref WNBA: try 2026 first, fall back to 2025 if 2026 has no data yet
 BREF_RATINGS_URLS = [

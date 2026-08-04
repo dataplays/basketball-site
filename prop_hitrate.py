@@ -25,7 +25,7 @@ from difflib import SequenceMatcher
 from flask import Flask, Response, request
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) prop-hitrate"
-SITE = "https://site.api.espn.com/apis/site/v2/sports/basketball"
+SITE = "https://site.web.api.espn.com/apis/site/v2/sports/basketball"
 WEB = "https://site.web.api.espn.com/apis/common/v3/sports/basketball"
 LEAGUES = {"nba": {"label": "NBA", "path": "nba", "season": 2026},
            "wnba": {"label": "WNBA", "path": "wnba", "season": 2026}}

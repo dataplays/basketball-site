@@ -27,7 +27,7 @@ except Exception:  # noqa: BLE001
     ET = None
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) situational-angles"
-BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball"
+BASE = "https://site.web.api.espn.com/apis/site/v2/sports/basketball"
 LEAGUES = {"nba": {"label": "NBA", "path": "nba"},
            "wnba": {"label": "WNBA", "path": "wnba"}}
 DEFAULT_LEAGUE = "nba"

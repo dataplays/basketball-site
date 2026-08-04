@@ -33,7 +33,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 ET = ZoneInfo("America/New_York")
 
 ESPN_API = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/"
     "mens-college-basketball/scoreboard"
 )
 

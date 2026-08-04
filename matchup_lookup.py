@@ -28,7 +28,7 @@ from flask import Flask, render_template_string, request
 
 app = Flask(__name__)
 
-BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball"
+BASE = "https://site.web.api.espn.com/apis/site/v2/sports/basketball"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) matchup-lookup"
 
 LEAGUES = {

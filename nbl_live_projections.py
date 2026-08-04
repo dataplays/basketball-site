@@ -31,7 +31,7 @@ from flask import Flask, jsonify, redirect, render_template_string, url_for
 ET = ZoneInfo("America/New_York")
 AEST = ZoneInfo("Australia/Sydney")
 
-ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports/basketball"
+ESPN_BASE = "https://site.web.api.espn.com/apis/site/v2/sports/basketball"
 ESPN_CORE = "https://sports.core.api.espn.com/v2/sports/basketball/leagues"
 LEAGUE_SLUG = "nbl"
 

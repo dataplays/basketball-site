@@ -34,11 +34,11 @@ RATINGS_CSV = (Path(os.environ.get("BBALL_DATA_DIR", str(Path(__file__).resolve(
 ET = ZoneInfo("America/New_York")
 
 ESPN_API = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/"
     "nba/scoreboard"
 )
 ESPN_SUMMARY = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/"
     "nba/summary"
 )
 BREF_RATINGS_URL = "https://www.basketball-reference.com/leagues/NBA_2026.html"

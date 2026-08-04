@@ -424,54 +424,6 @@ def _run_script(path, timeout=600):
         return "", f"{path.name}: {e}"
 
 
-@landing.route("/diag_espn")
-def diag_espn():
-    """TEMP diagnostic (remove after use): which request shape gets past
-    ESPN's 403 from this server?"""
-    import json as _json
-    import urllib.request as _rq
-    day = datetime.now().strftime("%Y%m%d")
-    sb = f"/apis/site/v2/sports/basketball/wnba/scoreboard?dates={day}"
-    full_ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-               "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-    variants = [
-        ("A current-ua site.api", f"https://site.api.espn.com{sb}",
-         {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}),
-        ("B full-browser-headers", f"https://site.api.espn.com{sb}",
-         {"User-Agent": full_ua, "Accept": "application/json, text/plain, */*",
-          "Accept-Language": "en-US,en;q=0.9", "Referer": "https://www.espn.com/",
-          "Origin": "https://www.espn.com"}),
-        ("C site.web.api host", f"https://site.web.api.espn.com{sb}",
-         {"User-Agent": full_ua, "Referer": "https://www.espn.com/"}),
-        ("D cdn.espn.com core", f"https://cdn.espn.com/core/wnba/scoreboard?xhr=1",
-         {"User-Agent": full_ua, "Referer": "https://www.espn.com/"}),
-        ("E default urllib UA", f"https://site.api.espn.com{sb}", {}),
-        ("F sports.core.api", "https://sports.core.api.espn.com/v2/sports/basketball/leagues/wnba/events?limit=3",
-         {"User-Agent": full_ua}),
-        ("G custom honest UA", f"https://site.api.espn.com{sb}",
-         {"User-Agent": "basketball-dashboards/1.0"}),
-        ("H summary custom UA", "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/summary?event=401736283",
-         {"User-Agent": "basketball-dashboards/1.0"}),
-        ("I injuries custom UA", "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/injuries",
-         {"User-Agent": "basketball-dashboards/1.0"}),
-        ("J teams custom UA", "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/teams?limit=50",
-         {"User-Agent": "basketball-dashboards/1.0"}),
-        ("K gamelog web-api custom", "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba/athletes/4433403/gamelog?season=2026&seasontype=2",
-         {"User-Agent": "basketball-dashboards/1.0"}),
-    ]
-    out = []
-    for label, url, headers in variants:
-        try:
-            req = _rq.Request(url, headers=headers)
-            with _rq.urlopen(req, timeout=15) as r:
-                body = r.read(400)
-                ok_json = body.strip().startswith(b"{")
-                out.append(f"{label:<24} -> {r.status}  json={ok_json}  {len(body)}b+")
-        except Exception as e:
-            out.append(f"{label:<24} -> {type(e).__name__}: {e}")
-    return Response("\n".join(out), mimetype="text/plain")
-
-
 @landing.route("/run/<name>", methods=["POST"])
 def run_tool(name):
     if name not in TOOLS:  # whitelist guard — only known tools may run

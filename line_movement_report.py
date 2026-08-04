@@ -72,7 +72,7 @@ def fetch_upcoming(league_key, window_hours):
     for d in range(days):
         ds = (datetime.now(ET) + timedelta(days=d)).strftime("%Y%m%d")
         sb = fetch_json(
-            f"https://site.api.espn.com/apis/site/v2/sports/basketball/"
+            f"https://site.web.api.espn.com/apis/site/v2/sports/basketball/"
             f"{cfg['path']}/scoreboard?dates={ds}{extra}"
         )
         for ev in (sb or {}).get("events", []):
@@ -110,7 +110,7 @@ def fetch_upcoming(league_key, window_hours):
 def fetch_last_completed(league_key, team_id, n=LAST_N):
     """Last n completed (non-preseason) games for a team: [(event_id, was_home)]."""
     cfg = LEAGUES[league_key]
-    base = (f"https://site.api.espn.com/apis/site/v2/sports/basketball/"
+    base = (f"https://site.web.api.espn.com/apis/site/v2/sports/basketball/"
             f"{cfg['path']}/teams/{team_id}/schedule")
     collected = {}          # event_id -> (date, was_home)
     cur_season = None

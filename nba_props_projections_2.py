@@ -44,13 +44,13 @@ OUTPUT_DIR = Path(os.environ.get("BBALL_DATA_DIR", str(Path(__file__).resolve().
 ET = ZoneInfo("America/New_York")
 
 ESPN_SCOREBOARD = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
 )
 ESPN_SUMMARY = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
 )
 ESPN_ROSTER = (
-    "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/roster"
+    "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/teams/{team_id}/roster"
 )
 ESPN_GAMELOG = (
     "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/"

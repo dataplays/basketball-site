@@ -37,9 +37,9 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0"
 OFFICIALS_FEED = "https://official.nba.com/wp-json/api/v1/get-game-officials?gamedate={date}"
 _DIR = os.path.dirname(os.path.abspath(__file__))
 LEAGUES = {
-    "nba":  {"label": "NBA",  "site": "https://site.api.espn.com/apis/site/v2/sports/basketball/nba",
+    "nba":  {"label": "NBA",  "site": "https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba",
              "csv": os.path.join(_DIR, "nba_ref_stats.csv"),  "feed_key": "nba",  "teams_limit": 40},
-    "wnba": {"label": "WNBA", "site": "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba",
+    "wnba": {"label": "WNBA", "site": "https://site.web.api.espn.com/apis/site/v2/sports/basketball/wnba",
              "csv": os.path.join(_DIR, "wnba_ref_stats.csv"), "feed_key": "wnba", "teams_limit": 20},
 }
 DEFAULT_LEAGUE = "nba"
