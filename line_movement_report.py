@@ -1,13 +1,17 @@
 """Line Movement Report -- who is the market moving WITH, and who is it moving AGAINST?
 
 For every upcoming game across the basketball leagues, shows each team's mean
-open->close SPREAD movement over its last 5 completed games, plus the differential
-between the two opponents.
+open->close movement over its last 5 completed games -- SPREADS and TOTALS --
+plus the spread differential between the two opponents and a combined totals
+lean for the matchup. Totals ride the same odds document as spreads, so they
+add zero extra API calls.
 
-Sign convention (team-oriented):
-    move = open_spread - close_spread   (spreads from that team's perspective)
+Sign conventions:
+  SPREAD (team-oriented):  move = open_spread - close_spread
     +  the market moved TOWARD the team (bigger favorite / smaller dog at close)
     -  the market moved AGAINST the team
+  TOTAL (game-oriented):   move = close_total - open_total
+    +  the total was bet UP toward the over    -  bet DOWN toward the under
 
 Data source: ESPN Core API odds feed, which stores open/current/close per game
 (sports.core.api.espn.com .../events/{id}/competitions/{id}/odds). Provider
@@ -165,7 +169,12 @@ def _parse_line(ps):
 
 
 def fetch_game_move(league_key, event_id, was_home):
-    """open - close spread movement from the team's perspective, or None."""
+    """(spread_move, total_move) for one completed game, either side None.
+
+    spread_move = open - close from the team's perspective (+ = market moved
+    TOWARD the team). total_move = close - open on the game total (+ = the
+    total was bet UP toward the over, - = down toward the under). Both come
+    from the SAME odds document, so totals add no extra API calls."""
     cfg = LEAGUES[league_key]
     data = fetch_json(
         f"https://sports.core.api.espn.com/v2/sports/basketball/leagues/"
@@ -173,35 +182,52 @@ def fetch_game_move(league_key, event_id, was_home):
     )
     items = (data or {}).get("items", [])
     if not items:
-        return None
+        return None, None
 
     def prio(it):
         name = (it.get("provider") or {}).get("name", "")
         return PROVIDER_PREF.index(name) if name in PROVIDER_PREF else len(PROVIDER_PREF)
 
     side_key = "homeTeamOdds" if was_home else "awayTeamOdds"
+    spread_move = total_move = None
     for it in sorted(items, key=prio):
-        side = it.get(side_key) or {}
-        opened = _parse_line((side.get("open") or {}).get("pointSpread"))
-        closed = _parse_line((side.get("close") or {}).get("pointSpread"))
-        if closed is None:
-            closed = _parse_line((side.get("current") or {}).get("pointSpread"))
-        if opened is not None and closed is not None:
-            return opened - closed
-    return None
+        if spread_move is None:
+            side = it.get(side_key) or {}
+            opened = _parse_line((side.get("open") or {}).get("pointSpread"))
+            closed = _parse_line((side.get("close") or {}).get("pointSpread"))
+            if closed is None:
+                closed = _parse_line((side.get("current") or {}).get("pointSpread"))
+            if opened is not None and closed is not None:
+                spread_move = opened - closed
+        if total_move is None:
+            t_open = _parse_line((it.get("open") or {}).get("total"))
+            t_close = _parse_line((it.get("close") or {}).get("total"))
+            if t_close is None:
+                t_close = _parse_line((it.get("current") or {}).get("total"))
+            if t_open is not None and t_close is not None:
+                total_move = t_close - t_open
+        if spread_move is not None and total_move is not None:
+            break
+    return spread_move, total_move
 
 
 def team_movement(league_key, team_id):
-    """Mean open->close movement over the last 5 games: (mean|None, n, [moves])."""
+    """Mean open->close movement over the last 5 games, spreads AND totals:
+    {'s_mean', 's_n', 's_moves', 't_mean', 't_n', 't_moves'}."""
     last = fetch_last_completed(league_key, team_id)
-    moves = []
+    s_moves, t_moves = [], []
     for eid, was_home in last:
-        mv = fetch_game_move(league_key, eid, was_home)
-        if mv is not None:
-            moves.append(round(mv, 1))
-    if not moves:
-        return None, 0, []
-    return sum(moves) / len(moves), len(moves), moves
+        sm, tm = fetch_game_move(league_key, eid, was_home)
+        if sm is not None:
+            s_moves.append(round(sm, 1))
+        if tm is not None:
+            t_moves.append(round(tm, 1))
+    return {
+        "s_mean": (sum(s_moves) / len(s_moves)) if s_moves else None,
+        "s_n": len(s_moves), "s_moves": s_moves,
+        "t_mean": (sum(t_moves) / len(t_moves)) if t_moves else None,
+        "t_n": len(t_moves), "t_moves": t_moves,
+    }
 
 
 # ----------------------------------------------------------------------- report
@@ -219,9 +245,10 @@ def fmt_moves(moves):
 def run(league_keys, window_hours, write_csv):
     now_et = datetime.now(ET)
     print("=" * 78)
-    print("LINE MOVEMENT REPORT  --  open->close spread moves, last 5 games per team")
+    print("LINE MOVEMENT REPORT  --  open->close SPREAD + TOTAL moves, last 5 games per team")
     print(f"Window: next {window_hours}h   Generated {now_et.strftime('%a %b %d %Y %I:%M %p ET')}")
-    print("Sign: + = market moved TOWARD the team by close   - = moved AGAINST it")
+    print("Spread sign: + = market moved TOWARD the team    - = moved AGAINST it")
+    print("Total sign:  + = total bet UP toward the OVER    - = DOWN toward the UNDER")
     print("=" * 78)
 
     csv_rows = []
@@ -236,6 +263,8 @@ def run(league_keys, window_hours, write_csv):
         print("-" * 78)
 
         team_ids = sorted({g["away_id"] for g in games} | {g["home_id"] for g in games})
+        EMPTY = {"s_mean": None, "s_n": 0, "s_moves": [],
+                 "t_mean": None, "t_n": 0, "t_moves": []}
         results = {}
         with ThreadPoolExecutor(max_workers=24) as ex:
             futs = {tid: ex.submit(team_movement, lk, tid) for tid in team_ids}
@@ -243,30 +272,51 @@ def run(league_keys, window_hours, write_csv):
                 try:
                     results[tid] = fut.result()
                 except Exception:
-                    results[tid] = (None, 0, [])
+                    results[tid] = dict(EMPTY)
 
         for g in games:
-            a_mean, a_n, a_moves = results.get(g["away_id"], (None, 0, []))
-            h_mean, h_n, h_moves = results.get(g["home_id"], (None, 0, []))
+            a = results.get(g["away_id"], EMPTY)
+            h = results.get(g["home_id"], EMPTY)
             tip = g["tip"].astimezone(ET).strftime("%a %b %d %I:%M %p ET")
             print(f"\n{tip}  --  {g['away_name']} @ {g['home_name']}")
-            print(f"  {g['away_name']:<26} avg {fmt_signed(a_mean)}  ({a_n}/{LAST_N})   moves: {fmt_moves(a_moves)}")
-            print(f"  {g['home_name']:<26} avg {fmt_signed(h_mean)}  ({h_n}/{LAST_N})   moves: {fmt_moves(h_moves)}")
-            if a_mean is not None and h_mean is not None:
-                diff = a_mean - h_mean
+            print(f"  SPREAD  {g['away_name']:<26} avg {fmt_signed(a['s_mean'])}  "
+                  f"({a['s_n']}/{LAST_N})   moves: {fmt_moves(a['s_moves'])}")
+            print(f"          {g['home_name']:<26} avg {fmt_signed(h['s_mean'])}  "
+                  f"({h['s_n']}/{LAST_N})   moves: {fmt_moves(h['s_moves'])}")
+            if a["s_mean"] is not None and h["s_mean"] is not None:
+                diff = a["s_mean"] - h["s_mean"]
                 if abs(diff) < 0.05:
-                    print("  DIFF:  0.00 (even -- market moving with both sides equally)")
+                    print("          DIFF:  0.00 (even -- market moving with both sides equally)")
                 else:
                     side = g["away_name"] if diff > 0 else g["home_name"]
-                    print(f"  DIFF: {fmt_signed(diff)} (away - home) -> market has been moving toward {side}")
+                    print(f"          DIFF: {fmt_signed(diff)} (away - home) -> market has been moving toward {side}")
             else:
                 diff = None
-                print("  DIFF: n/a (insufficient line data)")
+                print("          DIFF: n/a (insufficient line data)")
+
+            print(f"  TOTAL   {g['away_name']:<26} avg {fmt_signed(a['t_mean'])}  "
+                  f"({a['t_n']}/{LAST_N})   moves: {fmt_moves(a['t_moves'])}")
+            print(f"          {g['home_name']:<26} avg {fmt_signed(h['t_mean'])}  "
+                  f"({h['t_n']}/{LAST_N})   moves: {fmt_moves(h['t_moves'])}")
+            if a["t_mean"] is not None and h["t_mean"] is not None:
+                t_lean = (a["t_mean"] + h["t_mean"]) / 2.0
+                if abs(t_lean) < 0.05:
+                    print("          LEAN:  0.00 (totals in these teams' games close where they open)")
+                else:
+                    d = "UP toward the OVER" if t_lean > 0 else "DOWN toward the UNDER"
+                    print(f"          LEAN: {fmt_signed(t_lean)} -> totals in these teams' games get bet {d}")
+            else:
+                t_lean = None
+                print("          LEAN: n/a (insufficient totals data)")
+
             csv_rows.append([
                 cfg["label"], g["tip"].astimezone(ET).strftime("%Y-%m-%d %H:%M"),
-                g["away_name"], "" if a_mean is None else round(a_mean, 2), a_n, fmt_moves(a_moves),
-                g["home_name"], "" if h_mean is None else round(h_mean, 2), h_n, fmt_moves(h_moves),
+                g["away_name"], "" if a["s_mean"] is None else round(a["s_mean"], 2), a["s_n"], fmt_moves(a["s_moves"]),
+                g["home_name"], "" if h["s_mean"] is None else round(h["s_mean"], 2), h["s_n"], fmt_moves(h["s_moves"]),
                 "" if diff is None else round(diff, 2),
+                "" if a["t_mean"] is None else round(a["t_mean"], 2), a["t_n"], fmt_moves(a["t_moves"]),
+                "" if h["t_mean"] is None else round(h["t_mean"], 2), h["t_n"], fmt_moves(h["t_moves"]),
+                "" if t_lean is None else round(t_lean, 2),
             ])
 
     if not any_games:
@@ -279,7 +329,10 @@ def run(league_keys, window_hours, write_csv):
         with open(out, "w", newline="", encoding="utf-8") as f:
             w = csv.writer(f)
             w.writerow(["league", "tip_et", "away", "away_avg_move", "away_n", "away_moves",
-                        "home", "home_avg_move", "home_n", "home_moves", "diff_away_minus_home"])
+                        "home", "home_avg_move", "home_n", "home_moves", "diff_away_minus_home",
+                        "away_total_avg", "away_total_n", "away_total_moves",
+                        "home_total_avg", "home_total_n", "home_total_moves",
+                        "total_lean_combined"])
             w.writerows(csv_rows)
         print(f"\nCSV written: {out}")
 
