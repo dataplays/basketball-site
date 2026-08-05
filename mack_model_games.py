@@ -152,6 +152,18 @@ def book_pairs(event_data, book, home, away):
     return out
 
 
+def american(dec) -> str:
+    """Decimal -> American display ('+150', '-110'). CSVs keep decimal —
+    the games tracker grades from those fields — console display only."""
+    try:
+        d = float(dec)
+    except (TypeError, ValueError):
+        return "-"
+    if d <= 1.0:
+        return "-"
+    return f"+{round((d - 1) * 100)}" if d >= 2.0 else f"-{round(100 / (d - 1))}"
+
+
 def period_of(mkey):
     return "1H" if mkey.endswith("_h1") else "1Q" if mkey.endswith("_q1") else "FG"
 
@@ -278,7 +290,7 @@ def main():
         print("  " + "-" * 108)
         for r in all_rows:
             print(f"  {r['bet'][:32]:<32} {r['league']:<6} {r['market']:<14} "
-                  f"{r['soft_odds']:>8.2f} {r['pin_odds']:>9.2f} "
+                  f"{american(r['soft_odds']):>8} {american(r['pin_odds']):>9} "
                   f"{r['edge'] * 100:>5.1f}%  {r['game']}")
 
         # best-effort CSV (ephemeral on Render; persistent locally). Distinct

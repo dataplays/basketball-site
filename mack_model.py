@@ -64,6 +64,18 @@ SOFT_BOOKS = [
 ]
 SOFT_LABEL = "/".join(b[1] for b in SOFT_BOOKS)
 
+
+def american(dec) -> str:
+    """Decimal -> American display ('+150', '-110'). CSVs keep decimal —
+    the trackers grade from those fields — this is console display only."""
+    try:
+        d = float(dec)
+    except (TypeError, ValueError):
+        return "-"
+    if d <= 1.0:
+        return "-"
+    return f"+{round((d - 1) * 100)}" if d >= 2.0 else f"-{round(100 / (d - 1))}"
+
 _quota = {}
 
 
@@ -219,8 +231,8 @@ def main():
             odds_soft = r["soft_over"] if r["bet"] == "over" else r["soft_under"]
             odds_pin = r["pin_over"] if r["bet"] == "over" else r["pin_under"]
             print(f"  {r['player'][:24]:<24} {r['league']:<5} {r['prop']:<9} "
-                  f"{r['soft_line']:>5} {r['bet']:<6} {odds_soft:>6.2f} "
-                  f"{r['book']:<5} {odds_pin:>9.2f} "
+                  f"{r['soft_line']:>5} {r['bet']:<6} {american(odds_soft):>6} "
+                  f"{r['book']:<5} {american(odds_pin):>9} "
                   f"{r['edge'] * 100:>5.1f}%  {r['game']}")
         n_over = sum(1 for r in all_rows if r["bet"] == "over")
         print(f"\n  Over/Under split: {n_over} over / {len(all_rows) - n_over} under")
