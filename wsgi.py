@@ -45,7 +45,6 @@ DASH_LABELS = {
     "intl": "International",
     "fiba": "FIBA National Teams",
     "summer": "NBA Summer League",
-    "big3": "BIG3 (3-on-3)",
 }
 # Signature accent per dashboard (matches each dashboard's own header colour),
 # used to colour-code the landing-page cards. Falls back to blue.
@@ -58,7 +57,6 @@ DASH_COLORS = {
     "intl": "#00b894",
     "fiba": "#1d4ed8",
     "summer": "#f4a261",
-    "big3": "#e8112d",
     "median": "#4fc3f7",
     "news": "#e8730c",
     "injuries": "#e03e3e",
@@ -520,8 +518,8 @@ start_scheduler()
 # Top nav bar: just the live game dashboards. News / Median / Injuries are reached
 # from the landing page's "Tools & Reports" section (and the Tools link below).
 NAV_SHORT = {"nba": "NBA", "wnba": "WNBA", "cbb": "CBB", "wcbb": "WCBB",
-             "nbl": "NBL", "intl": "Intl", "big3": "BIG3", "prophetx": "Lines"}
-NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "big3", "prophetx"]
+             "nbl": "NBL", "intl": "Intl", "prophetx": "Lines"}
+NAV_ORDER = ["nba", "wnba", "cbb", "wcbb", "nbl", "intl", "prophetx"]
 
 INJECT_CSS = (
     ".bb-nav{display:flex;gap:4px;overflow-x:auto;background:#0a1218;"
