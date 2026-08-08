@@ -75,6 +75,7 @@ DASH_COLORS = {
     "inplay": "#9ccc65",
     "livevacuum": "#ffb74d",
     "contact": "#64b5f6",
+    "answerkey": "#d4af37",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -112,6 +113,7 @@ LANDING_TOOLS = {
     "inplay": "In-game props — live box + pregame model vs live lines, EV%",
     "livevacuum": "Live vacuum props — in-game exits, redistributed minutes, live EV",
     "contact": "Feedback form + email the site owner",
+    "answerkey": "Answer Key — derivative prices read from similar historical games",
 }
 
 
@@ -165,6 +167,7 @@ EXTRA_DASHBOARDS = {
     "inplay_props": ("inplay", "In-Game Prop Projections"),
     "inplay_vacuum_props": ("livevacuum", "Live Vacuum Props"),
     "contact_page": ("contact", "Contact Us"),
+    "answer_key": ("answerkey", "Answer Key"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
