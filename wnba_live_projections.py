@@ -1105,11 +1105,23 @@ def _total_edge(proj_total: float, mkt_total) -> tuple[str, str]:
     return f"{side} +{abs(e):.1f}", cls
 
 
+def _mean_of(*vals):
+    vs = [v for v in vals if v is not None]
+    return sum(vs) / len(vs) if vs else None
+
+
 def attach_market_lines(game: dict, raw: dict | None) -> None:
     """Merge consensus market lines + projection-vs-market edges into a game.
 
     Always sets the display fields (defaults to em-dash / hidden) so the
     template can reference them unconditionally.
+
+    Edge basis (Aug 8 2026, user request): the +/- chips compare the market
+    line to the MEAN of the three projection views — Expected (model), Actual
+    (live box-score pace), True Pace — using whichever are available (early
+    in a game, before box stats clear the gates, that's Expected alone).
+    Requires compute_live_pace_stats + compute_true_pace_proj to have run
+    on the game first (they do — see the enrichment loop).
     """
     game.update({
         "has_lines": False, "mkt_book_count": 0,
@@ -1144,10 +1156,27 @@ def attach_market_lines(game: dict, raw: dict | None) -> None:
     game["mkt_total_disp"] = f"{tot:.1f}" if tot is not None else "—"
     game["mkt_1h_total_disp"] = f"{tot1:.1f}" if tot1 is not None else "—"
 
-    game["edge_spread_disp"], game["edge_spread_cls"] = _spread_edge(game["proj_spread"], sh)
-    game["edge_1h_spread_disp"], game["edge_1h_spread_cls"] = _spread_edge(game["proj_1h_spread"], sh1)
-    game["edge_total_disp"], game["edge_total_cls"] = _total_edge(game["proj_total"], tot)
-    game["edge_1h_total_disp"], game["edge_1h_total_cls"] = _total_edge(game["proj_1h_total"], tot1)
+    fg_margin = _mean_of(game.get("proj_spread"), game.get("pace_proj_margin"),
+                         game.get("tp_margin"))
+    fg_total = _mean_of(game.get("proj_total"), game.get("pace_proj_total"),
+                        game.get("tp_total"))
+    h1_margin = _mean_of(game.get("proj_1h_spread"), game.get("pace_1h_margin"),
+                         game.get("tp_1h_margin"))
+    h1_total = _mean_of(game.get("proj_1h_total"), game.get("pace_1h_total"),
+                        game.get("tp_1h_total"))
+    n_views = 1 + sum(1 for v in (game.get("pace_proj_margin"),
+                                  game.get("tp_margin")) if v is not None)
+    game["edge_basis"] = {1: "Expected", 2: "mean of Expected + Actual",
+                          3: "mean of Expected + Actual + T Pace"}[n_views]
+
+    if fg_margin is not None:
+        game["edge_spread_disp"], game["edge_spread_cls"] = _spread_edge(fg_margin, sh)
+    if h1_margin is not None:
+        game["edge_1h_spread_disp"], game["edge_1h_spread_cls"] = _spread_edge(h1_margin, sh1)
+    if fg_total is not None:
+        game["edge_total_disp"], game["edge_total_cls"] = _total_edge(fg_total, tot)
+    if h1_total is not None:
+        game["edge_1h_total_disp"], game["edge_1h_total_cls"] = _total_edge(h1_total, tot1)
 
 
 # ── HTML Template ──
@@ -1639,7 +1668,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       </div>
       {% endif %}
       {% if g.has_lines %}
-      <div class="proj-row market-row">
+      <div class="proj-row market-row" title="+/- chips: market line vs {{ g.edge_basis }}">
         <div class="proj-stat market">
           <label>Mkt 1H Spread</label>
           <span class="val">{{ g.mkt_1h_spread_disp }}</span>
@@ -1908,7 +1937,7 @@ LIVE_PARTIAL = r"""{% if games %}
     </div>
     {% endif %}
     {% if g.has_lines %}
-    <div class="proj-row market-row">
+    <div class="proj-row market-row" title="+/- chips: market line vs {{ g.edge_basis }}">
       <div class="proj-stat market">
         <label>Mkt 1H Spread</label>
         <span class="val">{{ g.mkt_1h_spread_disp }}</span>
