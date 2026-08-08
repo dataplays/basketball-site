@@ -18,6 +18,7 @@ import argparse
 import json
 import sys
 import threading
+import time
 import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -46,6 +47,7 @@ MAX_SEASONS = 6    # how far back to walk to find them
 _teams_cache = {}      # league -> [team dicts]
 _sched_cache = {}      # (path, team_id, season) -> raw json
 _odds_cache = {}       # (path, event_id) -> {"details":.., "ou":..}
+_today_cache = {"ts": 0.0, "data": None}   # today's slate, ~5 min TTL
 _lock = threading.Lock()
 
 
@@ -348,6 +350,14 @@ TEMPLATE = """
          font-size:15px;font-weight:600;cursor:pointer;width:100%}
   button:hover{background:#81d4fa}
   .err{color:var(--loss);font-size:14px;margin-top:10px}
+  .todaybtn{display:inline-block;margin-top:14px;padding:8px 14px;border:1px solid var(--accent);
+            border-radius:6px;color:var(--accent);text-decoration:none;font-size:14px;font-weight:600}
+  .todaybtn:hover{background:var(--accent);color:#0f1419}
+  .gamegrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:10px}
+  .gamebtn{display:block;padding:10px 12px;background:#0f1419;border:1px solid var(--border);
+           border-radius:8px;color:var(--text);text-decoration:none;font-size:14px;font-weight:600}
+  .gamebtn:hover{border-color:var(--accent)}
+  .gamebtn .st{display:block;color:var(--muted);font-size:12px;font-weight:400;margin-top:3px}
   .cols{display:grid;grid-template-columns:1fr 1fr;gap:20px}
   @media(max-width:760px){.cols{grid-template-columns:1fr}}
   table{width:100%;border-collapse:collapse;font-size:13.5px}
@@ -379,7 +389,24 @@ TEMPLATE = """
       <button type="submit">Look up</button>
     </form>
     {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <a class="todaybtn" href="?today=1">&#128197; Today's Games &mdash; every matchup, one click</a>
   </div>
+
+  {% if today_view %}
+    {% for lg in today_games %}
+    <div class="panel">
+      <h2>{{ lg.label }} <span class="rec">— {{ lg.games|length }} game(s) today</span></h2>
+      <div class="gamegrid">
+        {% for g in lg.games %}
+        <a class="gamebtn" href="{{ g.href }}">{{ g.label }}<span class="st">{{ g.status }}</span></a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+    {% if not today_games %}
+    <div class="panel note">No games today in any league.</div>
+    {% endif %}
+  {% endif %}
 
   {% if away_team %}
   <div class="panel">
@@ -434,6 +461,57 @@ TEMPLATE = """
 """
 
 
+def fetch_today_games():
+    """Today's slate across every league -> [{key,label,games:[...]}], each
+    game carrying a prefilled ?league=&away=&home= href (relative -> works
+    both standalone and mounted at /matchup). Cached ~5 min."""
+    with _lock:
+        if _today_cache["data"] is not None and time.time() - _today_cache["ts"] < 300:
+            return _today_cache["data"]
+    stamp = datetime.now().strftime("%Y%m%d")
+
+    def one(item):
+        k, cfg = item
+        extra = "&groups=50&limit=500" if "college" in cfg["path"] else ""
+        try:
+            data = _get(f"{BASE}/{cfg['path']}/scoreboard?dates={stamp}{extra}")
+        except Exception:
+            return None
+        games = []
+        for ev in data.get("events", []) or []:
+            try:
+                comp = ev["competitions"][0]
+                home = away = None
+                for c in comp.get("competitors", []):
+                    if c.get("homeAway") == "home":
+                        home = c
+                    elif c.get("homeAway") == "away":
+                        away = c
+                if not home or not away:
+                    continue
+                an = away["team"]["displayName"]
+                hn = home["team"]["displayName"]
+                status = (((ev.get("status") or {}).get("type") or {})
+                          .get("shortDetail") or "")
+                games.append({
+                    "label": f"{an} @ {hn}", "status": status,
+                    "date": ev.get("date", ""),
+                    "href": (f"?league={k}&away={urllib.parse.quote_plus(an)}"
+                             f"&home={urllib.parse.quote_plus(hn)}"),
+                })
+            except Exception:
+                continue
+        games.sort(key=lambda g: g["date"])
+        return {"key": k, "label": cfg["label"], "games": games} if games else None
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        out = [r for r in ex.map(one, list(LEAGUES.items())) if r]
+    with _lock:
+        _today_cache["data"] = out
+        _today_cache["ts"] = time.time()
+    return out
+
+
 def run_lookup(league, away_in, home_in):
     """Resolve teams + build all tables. Returns a context dict for the template."""
     ctx = {"leagues": LEAGUES, "league": league, "away_in": away_in, "home_in": home_in,
@@ -462,6 +540,11 @@ def index():
     league = request.values.get("league", DEFAULT_LEAGUE)
     if league not in LEAGUES:
         league = DEFAULT_LEAGUE
+    if request.values.get("today"):
+        ctx = run_lookup(league, "", "")
+        ctx["today_view"] = True
+        ctx["today_games"] = fetch_today_games()
+        return render_template_string(TEMPLATE, **ctx)
     ctx = run_lookup(league, request.values.get("away", "").strip(),
                      request.values.get("home", "").strip())
     return render_template_string(TEMPLATE, **ctx)
