@@ -337,6 +337,94 @@ def run(league_keys, window_hours, write_csv):
         print(f"\nCSV written: {out}")
 
 
+# ── Web mode (mounted at /linemoves on the basketball-site) ──────────────────
+try:
+    import io
+    import threading
+    from contextlib import redirect_stderr, redirect_stdout
+
+    from flask import Flask, Response, request
+
+    app = Flask(__name__)
+    _run_lock = threading.Lock()
+
+    _PAGE = """<style>
+body{background:#10151c;color:#dfe7ef;font-family:Segoe UI,Arial,sans-serif;
+     margin:0;padding:14px 18px}
+h1{color:#4db6ac;font-size:20px;margin:4px 0 6px}
+.note{color:#8aa;font-size:12.5px;margin:4px 0 12px}
+a.menu{display:inline-block;color:#4db6ac;text-decoration:none;font-size:13px;
+       font-weight:600;border:1px solid #4db6ac;border-radius:6px;
+       padding:4px 12px;margin-bottom:8px}
+a.menu:hover{background:#4db6ac;color:#10151c}
+select,input{background:#0e131a;color:#dfe7ef;border:1px solid #33414f;
+             border-radius:4px;padding:5px 7px;font-size:13px}
+button{background:#4db6ac;color:#10151c;font-weight:700;border:none;
+       border-radius:5px;padding:7px 16px;font-size:13px;cursor:pointer}
+button:disabled{opacity:0.5;cursor:wait}
+#out{background:#0e131a;border:1px solid #2a3542;border-radius:8px;
+     padding:12px 14px;margin-top:12px;font-size:12px;line-height:1.55;
+     overflow-x:auto;white-space:pre;color:#dfe7ef;min-height:60px}
+label{font-size:11px;color:#9ab;margin-right:4px}
+</style><title>Line Movement</title>
+<a class='menu' href='/'>&larr; Main Menu</a>
+<h1>&#128200; Line Movement</h1>
+<div class='note'>Each team's mean open&rarr;close movement over its last 5
+completed games &mdash; spreads (+ = market moved TOWARD the team) and totals
+(+ = bet UP toward the over) &mdash; plus a matchup DIFF/LEAN for every
+upcoming game. Runs automatically; re-run after changing the filters.</div>
+<label>League</label><select id='lg'><option value=''>All leagues</option>
+__OPTS__</select>
+<label style='margin-left:10px'>Window (days)</label>
+<input id='days' type='number' value='2' min='1' max='7' style='width:60px'>
+<button id='go' onclick='go()' style='margin-left:10px'>Run report</button>
+<pre id='out'>Loading&hellip;</pre>
+<script>
+async function go(){
+  const b=document.getElementById('go'),o=document.getElementById('out');
+  b.disabled=true;o.textContent='Fetching schedules + stored lines (~20-60s)...';
+  const lg=document.getElementById('lg').value,
+        d=document.getElementById('days').value;
+  try{const r=await fetch('run?league='+lg+'&days='+d,{method:'POST'});
+      o.textContent=await r.text();}
+  catch(e){o.textContent='Error: '+e;}
+  b.disabled=false;
+}
+go();
+</script>"""
+
+    @app.route("/", methods=["GET"])
+    def index():
+        opts = "".join(f"<option value='{k}'>{k}</option>"
+                       for k in sorted(LEAGUES))
+        return _PAGE.replace("__OPTS__", opts)
+
+    @app.route("/run", methods=["POST"])
+    def run_report():
+        if not _run_lock.acquire(blocking=False):
+            return Response("A report is already running — give it a minute.",
+                            mimetype="text/plain")
+        try:
+            lg = request.args.get("league") or ""
+            leagues = [lg] if lg in LEAGUES else list(LEAGUES)
+            try:
+                days = min(max(float(request.args.get("days") or 2), 0.5), 7)
+            except ValueError:
+                days = 2.0
+            buf = io.StringIO()
+            try:
+                with redirect_stdout(buf), redirect_stderr(buf):
+                    run(leagues, int(days * 24), False)
+            except Exception as exc:
+                buf.write(f"\n[ERROR] report failed: {exc!r}")
+            return Response(buf.getvalue() or "(no output)",
+                            mimetype="text/plain")
+        finally:
+            _run_lock.release()
+except ImportError:                      # console mode works without flask
+    app = None
+
+
 def main():
     ap = argparse.ArgumentParser(description="Open->close line movement report")
     ap.add_argument("--league", choices=sorted(LEAGUES), help="one league only (default: all)")

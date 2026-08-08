@@ -76,6 +76,7 @@ DASH_COLORS = {
     "livevacuum": "#ffb74d",
     "contact": "#64b5f6",
     "answerkey": "#d4af37",
+    "linemoves": "#4db6ac",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -110,6 +111,7 @@ LANDING_TOOLS = {
     "livevacuum": "Live vacuum props — in-game exits, redistributed minutes, live EV",
     "contact": "Feedback form + email the site owner",
     "answerkey": "Answer Key — derivative prices read from similar historical games",
+    "linemoves": "Open→close spread & total steam — last 5 games per team, every upcoming game",
 }
 
 
@@ -169,6 +171,7 @@ EXTRA_DASHBOARDS = {
     "inplay_vacuum_props": ("livevacuum", "Live Vacuum Props"),
     "contact_page": ("contact", "Contact Us"),
     "answer_key": ("answerkey", "Answer Key"),
+    "line_movement_report": ("linemoves", "Line Movement"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
@@ -184,7 +187,6 @@ for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
 EXTRA_TOOLS = {
     "update_all_stats": "Update All Stats \u2014 refresh NBA/WNBA/CBB/WCBB ratings",
     "mack_model": "Mack Model \u2014 Pinnacle vs BetRivers prop scanner (WNBA + NBA)",
-    "line_movement_report": "Line Movement \u2014 open\u2192close spread steam, last 5 games per team",
     "mack_model_games": "Mack Model: Games \u2014 Pinnacle vs BetRivers sides/totals/ML/team totals (FG/1H/1Q)",
     "intl_line_compare": "Intl Line Compare \u2014 +EV vs de-vigged Pinnacle (EuroLeague/NBL; FD/BR/CZR/theScore)",
 }
@@ -287,10 +289,6 @@ display:inline-block;margin-left:4px">&#9993; Contact Us</a></div></header>
       <div class=d>{{ desc }}</div>
     </a>
     {% endfor %}
-    <a class=card style="border-left-color:#4db6ac" href="/tools?run=line_movement_report">
-      <div class=t>Line Movement</div>
-      <div class=d>Open&rarr;close spread steam &mdash; last 5 games per team, every upcoming game</div>
-    </a>
     <a class=card style="border-left-color:#ba68c8" href="/mack">
       <div class=t>Mack Models</div>
       <div class=d>Pinnacle-anchor scanners &mdash; player props + game markets (sides/totals/ML/TT)</div>
