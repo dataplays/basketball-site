@@ -82,13 +82,9 @@ TOOL_LABELS = {
     "wnba_props_projections": "WNBA Player Props — Projections",
     "nba_props_projections_2": "NBA Player Props 2 — Projections (pre-Jul-1 model rollback)",
     "wnba_props_projections_2": "WNBA Player Props 2 — Projections (pre-Jul-1 model rollback)",
-    "wnba_props_track": "WNBA Props — Tracker / Grading",
-    "nba_props_track": "NBA Props — Tracker / Grading",
 }
 TOOL_REQUIRES = {
-    "wnba_props_track": ["wnba_props_grade.py"],
     "wnba_props_projections": ["wnba_props_grade.py"],
-    "nba_props_track": ["nba_props_grade.py"],
     "nba_props_projections": ["nba_props_grade.py"],
 }
 # Mounted pages that belong under "Tools & Reports" on the landing page (instead
@@ -134,9 +130,14 @@ def discover_dashboards():
 
 def discover_tools():
     HELPERS = ("_grade",)  # imported by other tools; not runnable on their own
+    # Trackers grade local projection PDFs against a locally-accumulating CSV.
+    # Neither exists on the server, so the buttons only ever printed the last
+    # synced snapshot — removed from the page (the .py files stay: the
+    # projections engines import them for their auto-update hook).
+    HIDDEN = {"wnba_props_track", "nba_props_track"}
     tools = []
     for p in sorted(HERE.glob("*_props_*.py")):
-        if p.stem.endswith(HELPERS):
+        if p.stem.endswith(HELPERS) or p.stem in HIDDEN:
             continue
         tools.append(p.stem)
     return tools
