@@ -357,6 +357,13 @@ a.menu{display:inline-block;color:#d4af37;text-decoration:none;font-size:13px;
        font-weight:600;border:1px solid #d4af37;border-radius:6px;
        padding:4px 12px;margin-bottom:8px}
 a.menu:hover{background:#d4af37;color:#10151c}
+button.scan{background:transparent;color:#d4af37;border:1px solid #d4af37;
+            font-weight:600;margin-top:12px}
+button.scan:hover{background:#d4af37;color:#10151c}
+button.scan:disabled{opacity:0.5;cursor:wait}
+#edgeout{display:none;background:#0e131a;border:1px solid #2a3542;
+         border-radius:8px;padding:12px 14px;margin-top:10px;font-size:12px;
+         line-height:1.55;overflow-x:auto;white-space:pre;color:#dfe7ef}
 """
 
 
@@ -369,9 +376,24 @@ def render_page(rep, form):
             "<span class='emp'>Gold = empirical</span> &middot; "
             "<span class='mod'>blue = Normal model (/pricer math)</span>. "
             "Spread is the HOME line (negative = home favored).</div>",
-            form]
+            form,
+            "<button class='scan' id='scanbtn' onclick='scanEdges()'>"
+            "&#9889; Scan today's slate for edges</button>"
+            "<pre id='edgeout'></pre>"
+            "<script>async function scanEdges(){"
+            "const b=document.getElementById('scanbtn'),"
+            "o=document.getElementById('edgeout');"
+            "b.disabled=true;const t=b.textContent;b.textContent='Scanning...';"
+            "o.style.display='block';"
+            "o.textContent='Running the Answer Key over every game on the "
+            "slate (~30-60s)...';"
+            "try{const r=await fetch('edges',{method:'POST'});"
+            "o.textContent=await r.text();}"
+            "catch(e){o.textContent='Error: '+e;}"
+            "b.disabled=false;b.textContent=t;}</script>"]
     if not rep:
-        body.append("<p class='note'>Enter a market above.</p>")
+        body.append("<p class='note'>Enter a market above for a single game, "
+                    "or scan the whole slate.</p>")
         return "".join(body)
     if "error" in rep:
         body.append(f"<p class='err'>{rep['error']}</p>")
@@ -488,8 +510,37 @@ def build_form(lg="wnba", spread="", total="", n=DEFAULT_N, w=DEFAULT_W,
 # ── flask app ──
 
 try:
-    from flask import Flask, request
+    import threading
+    from flask import Flask, Response, request
     app = Flask(__name__)
+    _edges_lock = threading.Lock()
+
+    @app.route("/edges", methods=["POST"])
+    def edges_scan():
+        """Run the slate edge scanner and return its console output.
+        Relative fetch('edges') from the page -> mount-safe (/answerkey/edges
+        on the site, /edges standalone). Lock: a double-click must not spend
+        Odds API credits twice."""
+        if not _edges_lock.acquire(blocking=False):
+            return Response("A scan is already running — give it a minute.",
+                            mimetype="text/plain")
+        try:
+            import io
+            from contextlib import redirect_stderr, redirect_stdout
+            buf = io.StringIO()
+            try:
+                import answer_key_edges as ake
+                leagues = [lg for lg in LEAGUE_CFG
+                           if os.path.exists(csv_path(lg))]
+                with redirect_stdout(buf), redirect_stderr(buf):
+                    ake.run(leagues, ake.MIN_EV, ake.HOURS, DEFAULT_N,
+                            DEFAULT_W, False, DEFAULT_MAX_DIST)
+            except Exception as exc:
+                buf.write(f"\n[ERROR] scan failed: {exc!r}")
+            return Response(buf.getvalue() or "(no output)",
+                            mimetype="text/plain")
+        finally:
+            _edges_lock.release()
 
     @app.route("/", methods=["GET", "POST"])
     def index():
