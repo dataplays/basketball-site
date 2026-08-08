@@ -3060,42 +3060,6 @@ def api_games():
     })
 
 
-@app.route("/diag_odds_probe")
-def diag_odds_probe():
-    """TEMP diag (Aug 8 2026, remove after use): which bookmakers does the
-    api-sports ODDS endpoint carry, and what does it pair on the currently
-    active intl leagues? Answers whether Pinnacle + US-bettable books exist
-    there for a broader /intlev screen."""
-    out = {}
-    try:
-        cat = _apisports_get("/odds/bookmakers")
-        out["bookmaker_catalog"] = sorted(
-            (b or {}).get("name") or "?" for b in cat.get("response", []) or [])
-        out["catalog_errors"] = cat.get("errors") or None
-    except Exception as e:
-        out["bookmakers_error"] = repr(e)
-    samples = {}
-    for label, league_id, season in (("pr-bsn", 76, "2026"),
-                                     ("cebl", 222, "2026"),
-                                     ("ph-pba-gov", 152, "2025"),
-                                     ("cl-lnb", 114, "2026-2027")):
-        try:
-            d = _apisports_get(f"/odds?league={league_id}&season={season}")
-            resp = d.get("response", []) or []
-            books = sorted({(bk or {}).get("name") or "?" for g in resp
-                            for bk in (g.get("bookmakers") or [])})
-            markets = sorted({(b or {}).get("name") or "?" for g in resp[:3]
-                              for bk in (g.get("bookmakers") or [])[:3]
-                              for b in (bk.get("bets") or [])[:8]})
-            samples[label] = {"games_with_odds": len(resp), "books": books,
-                              "sample_markets": markets[:12],
-                              "errors": d.get("errors") or None}
-        except Exception as e:
-            samples[label] = {"error": repr(e)}
-    out["samples"] = samples
-    return jsonify(out)
-
-
 @app.route("/refresh")
 def refresh_ratings():
     """Trigger a fresh ratings reload in the background (non-blocking)."""
