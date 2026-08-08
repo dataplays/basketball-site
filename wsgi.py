@@ -77,6 +77,7 @@ DASH_COLORS = {
     "contact": "#64b5f6",
     "answerkey": "#d4af37",
     "linemoves": "#4db6ac",
+    "intlev": "#00cec9",
 }
 TOOL_LABELS = {
     "nba_props_projections": "NBA Player Props — Projections",
@@ -112,6 +113,7 @@ LANDING_TOOLS = {
     "contact": "Feedback form + email the site owner",
     "answerkey": "Answer Key — derivative prices read from similar historical games",
     "linemoves": "Open→close spread & total steam — last 5 games per team, every upcoming game",
+    "intlev": "Intl +EV vs de-vigged Pinnacle — EuroLeague/NBL at FD/BR/CZR/theScore",
 }
 
 
@@ -172,6 +174,7 @@ EXTRA_DASHBOARDS = {
     "contact_page": ("contact", "Contact Us"),
     "answer_key": ("answerkey", "Answer Key"),
     "line_movement_report": ("linemoves", "Line Movement"),
+    "intl_line_compare": ("intlev", "Intl Line Compare"),
 }
 for _modname, (_prefix, _label) in EXTRA_DASHBOARDS.items():
     try:
@@ -188,7 +191,6 @@ EXTRA_TOOLS = {
     "update_all_stats": "Update All Stats \u2014 refresh NBA/WNBA/CBB/WCBB ratings",
     "mack_model": "Mack Model \u2014 Pinnacle vs BetRivers prop scanner (WNBA + NBA)",
     "mack_model_games": "Mack Model: Games \u2014 Pinnacle vs BetRivers sides/totals/ML/team totals (FG/1H/1Q)",
-    "intl_line_compare": "Intl Line Compare \u2014 +EV vs de-vigged Pinnacle (EuroLeague/NBL; FD/BR/CZR/theScore)",
 }
 for _tname, _tlabel in EXTRA_TOOLS.items():
     if (HERE / f"{_tname}.py").exists() and _tname not in TOOLS:

@@ -217,25 +217,16 @@ def scan_sport(sport_key: str, title: str, min_ev: float) -> list[dict]:
     return plays
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Intl basketball +EV scanner vs Pinnacle")
-    ap.add_argument("--min-ev", type=float, default=1.0,
-                    help="minimum EV%% to list (default 1.0)")
-    ap.add_argument("--sport", default="",
-                    help="comma-separated Odds API sport keys to force "
-                         "(default: auto-discover active intl basketball)")
-    ap.add_argument("--csv", action="store_true", help="also write a dated CSV")
-    a = ap.parse_args()
-
+def report(min_ev=1.0, sport="", write_csv=False):
     print("=" * 78)
     print(f"  INTL LINE COMPARE — Pinnacle fair line vs "
           f"{'/'.join(b[1] for b in SOFT_BOOKS)}")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M')} | de-vigged Pinnacle = "
-          f"source of truth | min EV {a.min_ev:g}%")
+          f"source of truth | min EV {min_ev:g}%")
     print("=" * 78)
 
-    if a.sport:
-        targets = [(k.strip(), k.strip()) for k in a.sport.split(",") if k.strip()]
+    if sport:
+        targets = [(k.strip(), k.strip()) for k in sport.split(",") if k.strip()]
     else:
         targets = discover_intl_sports()
         if not targets:
@@ -246,10 +237,10 @@ def main():
 
     plays = []
     for key, title in targets:
-        plays.extend(scan_sport(key, title, a.min_ev))
+        plays.extend(scan_sport(key, title, min_ev))
 
     if not plays:
-        print(f"\n  No +EV plays >= {a.min_ev:g}% right now.")
+        print(f"\n  No +EV plays >= {min_ev:g}% right now.")
     else:
         plays.sort(key=lambda r: -r["ev_pct"])
         print(f"\n  {len(plays)} +EV PLAYS (vs de-vigged Pinnacle)")
@@ -261,7 +252,7 @@ def main():
                   f"{r['pin_am']:>7} {r['fair_pct']:>5.1f}% {r['ev_pct']:>5.2f}%  "
                   f"{r['market']:<9} {r['game']}  [{r['tip']}]")
 
-        if a.csv:
+        if write_csv:
             try:
                 out_dir = os.environ.get("BBALL_DATA_DIR", r"C:\Users\User\Documents")
                 path = os.path.join(out_dir, f"intl_ev_{date.today().isoformat()}.csv")
@@ -275,6 +266,100 @@ def main():
 
     if _quota.get("remaining"):
         print(f"\n  Odds API credits remaining: {_quota['remaining']}")
+
+
+# ── Web mode (mounted at /intlev on the basketball-site) ─────────────────────
+try:
+    import io
+    import threading
+    from contextlib import redirect_stderr, redirect_stdout
+
+    from flask import Flask, Response, request
+
+    app = Flask(__name__)
+    _run_lock = threading.Lock()
+
+    _PAGE = """<style>
+body{background:#10151c;color:#dfe7ef;font-family:Segoe UI,Arial,sans-serif;
+     margin:0;padding:14px 18px}
+h1{color:#00cec9;font-size:20px;margin:4px 0 6px}
+.note{color:#8aa;font-size:12.5px;margin:4px 0 12px}
+a.menu{display:inline-block;color:#00cec9;text-decoration:none;font-size:13px;
+       font-weight:600;border:1px solid #00cec9;border-radius:6px;
+       padding:4px 12px;margin-bottom:8px}
+a.menu:hover{background:#00cec9;color:#10151c}
+input{background:#0e131a;color:#dfe7ef;border:1px solid #33414f;
+      border-radius:4px;padding:5px 7px;font-size:13px}
+button{background:#00cec9;color:#10151c;font-weight:700;border:none;
+       border-radius:5px;padding:7px 16px;font-size:13px;cursor:pointer}
+button:disabled{opacity:0.5;cursor:wait}
+#out{background:#0e131a;border:1px solid #2a3542;border-radius:8px;
+     padding:12px 14px;margin-top:12px;font-size:12px;line-height:1.55;
+     overflow-x:auto;white-space:pre;color:#dfe7ef;min-height:60px}
+label{font-size:11px;color:#9ab;margin-right:4px}
+</style><title>Intl Line Compare</title>
+<a class='menu' href='/'>&larr; Main Menu</a>
+<h1>&#127760; Intl Line Compare</h1>
+<div class='note'>De-vigged Pinnacle = fair; every FanDuel / BetRivers /
+Caesars / theScore price on the SAME line is scored by EV%. Leagues are
+auto-discovered from The Odds API (EuroLeague ~Oct&ndash;May, Australian NBL
+~Sep&ndash;Mar) &mdash; a quiet page just means nothing is in season. Runs
+automatically on load.</div>
+<label>Min EV %</label>
+<input id='minev' type='number' value='1.0' step='0.5' min='0' style='width:70px'>
+<button id='go' onclick='go()' style='margin-left:10px'>Run scan</button>
+<pre id='out'>Loading&hellip;</pre>
+<script>
+async function go(){
+  const b=document.getElementById('go'),o=document.getElementById('out');
+  b.disabled=true;o.textContent='Scanning active intl leagues...';
+  const m=document.getElementById('minev').value;
+  try{const r=await fetch('run?minev='+m,{method:'POST'});
+      o.textContent=await r.text();}
+  catch(e){o.textContent='Error: '+e;}
+  b.disabled=false;
+}
+go();
+</script>"""
+
+    @app.route("/", methods=["GET"])
+    def index():
+        return _PAGE
+
+    @app.route("/run", methods=["POST"])
+    def run_scan():
+        if not _run_lock.acquire(blocking=False):
+            return Response("A scan is already running — give it a minute.",
+                            mimetype="text/plain")
+        try:
+            try:
+                min_ev = max(float(request.args.get("minev") or 1.0), 0.0)
+            except ValueError:
+                min_ev = 1.0
+            buf = io.StringIO()
+            try:
+                with redirect_stdout(buf), redirect_stderr(buf):
+                    report(min_ev=min_ev)
+            except Exception as exc:
+                buf.write(f"\n[ERROR] scan failed: {exc!r}")
+            return Response(buf.getvalue() or "(no output)",
+                            mimetype="text/plain")
+        finally:
+            _run_lock.release()
+except ImportError:                      # console mode works without flask
+    app = None
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Intl basketball +EV scanner vs Pinnacle")
+    ap.add_argument("--min-ev", type=float, default=1.0,
+                    help="minimum EV%% to list (default 1.0)")
+    ap.add_argument("--sport", default="",
+                    help="comma-separated Odds API sport keys to force "
+                         "(default: auto-discover active intl basketball)")
+    ap.add_argument("--csv", action="store_true", help="also write a dated CSV")
+    a = ap.parse_args()
+    report(a.min_ev, a.sport, a.csv)
 
 
 if __name__ == "__main__":
