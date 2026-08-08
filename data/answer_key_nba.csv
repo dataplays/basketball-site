@@ -5450,8 +5450,6 @@ nba,2017,2,2016-11-19,400899640,Minnesota Timberwolves,Memphis Grizzlies,0,3.0,1
 nba,2017,2,2016-11-19,400899641,Golden State Warriors,Milwaukee Bucks,0,7.5,217.5,124,121,28,41,34,21,37,29,26,29,0,5Dimes.eu
 nba,2017,2,2016-11-20,400899643,Atlanta Hawks,New York Knicks,0,3.0,209.0,94,104,20,21,25,28,24,22,29,29,0,5Dimes.eu
 nba,2017,2,2016-11-20,400899644,Portland Trail Blazers,Brooklyn Nets,0,4.0,222.5,129,109,32,38,29,30,29,35,20,25,0,5Dimes.eu
-nba,2017,2,2016-11-20,400899648,Chicago Bulls,Los Angeles Lakers,0,-2.5,209.5,118,110,30,32,28,28,30,31,24,25,0,teamrankings
-nba,2017,2,2016-11-20,400899645,Indiana Pacers,Oklahoma City Thunder,0,-9.5,210.5,115,111,30,28,21,24,21,33,16,33,1,teamrankings
 nba,2017,2,2016-11-20,400899646,Toronto Raptors,Sacramento Kings,0,3.5,211.0,99,102,28,35,18,18,36,22,28,16,0,5Dimes.eu
 nba,2017,2,2016-11-20,400899647,Utah Jazz,Denver Nuggets,0,-3.5,197.0,91,105,14,27,22,28,24,29,23,29,0,5Dimes.eu
 nba,2017,2,2016-11-19,400899642,Chicago Bulls,LA Clippers,0,-7.5,202.5,95,102,33,19,25,18,23,24,25,30,0,5Dimes.eu
@@ -5498,18 +5496,9 @@ nba,2017,2,2016-11-26,400899690,San Antonio Spurs,Washington Wizards,0,6.0,202.5
 nba,2017,2,2016-11-25,400899689,Houston Rockets,Sacramento Kings,0,3.5,215.5,117,104,38,30,22,27,19,31,24,30,0,5Dimes.eu
 nba,2017,2,2016-11-25,400899685,Oklahoma City Thunder,Denver Nuggets,0,2.5,214.5,132,129,31,31,22,38,30,33,26,33,1,5Dimes.eu
 nba,2017,2,2016-11-25,400899688,Golden State Warriors,Los Angeles Lakers,0,13.0,229.5,109,85,30,23,27,29,20,23,21,21,0,5Dimes.eu
-nba,2017,2,2016-11-26,400899693,Memphis Grizzlies,Miami Heat,0,1.5,186.5,110,107,24,27,31,28,31,18,33,25,0,teamrankings
 nba,2017,2,2016-11-26,400899692,Detroit Pistons,Oklahoma City Thunder,0,-5.0,203.0,88,106,19,27,22,20,29,27,21,29,0,BETONLINE.ag
 nba,2017,2,2016-11-26,400899691,New York Knicks,Charlotte Hornets,0,-6.0,208.5,102,107,22,25,24,31,38,20,17,32,0,5Dimes.eu
-nba,2017,2,2016-11-27,400899695,Cleveland Cavaliers,Philadelphia 76ers,0,11.5,210.0,112,108,24,28,25,35,30,28,23,27,0,numberfire
-nba,2017,2,2016-11-27,400899696,Denver Nuggets,Phoenix Suns,0,-2.0,214.0,120,114,29,34,23,34,28,15,36,35,0,numberfire
 nba,2017,2,2016-11-26,400899694,Minnesota Timberwolves,Golden State Warriors,0,-15.0,223.0,102,115,33,15,25,29,30,26,34,25,0,BETONLINE.ag
-nba,2017,2,2016-11-27,400899697,Sacramento Kings,Brooklyn Nets,0,5.0,220.5,122,105,31,27,34,30,35,24,18,28,0,numberfire
-nba,2017,2,2016-11-27,400899700,New Orleans Pelicans,Dallas Mavericks,0,5.5,197.0,81,91,20,22,18,21,26,18,16,31,0,numberfire
-nba,2017,2,2016-11-27,400899698,Milwaukee Bucks,Orlando Magic,0,-1.0,196.0,104,96,36,22,21,25,29,23,20,24,0,numberfire
-nba,2017,2,2016-11-27,400899699,LA Clippers,Indiana Pacers,0,12.0,206.5,70,91,20,20,18,12,23,27,26,15,0,numberfire
-nba,2017,2,2016-11-27,400899701,Houston Rockets,Portland Trail Blazers,0,2.0,226.5,130,114,35,30,31,34,35,27,31,21,0,numberfire
-nba,2017,2,2016-11-27,400899702,Atlanta Hawks,Los Angeles Lakers,0,5.0,209.5,94,109,32,16,29,17,21,35,28,25,0,numberfire
 nba,2017,2,2016-11-28,400899707,Charlotte Hornets,Memphis Grizzlies,0,1.0,197.0,104,85,25,31,25,23,25,14,21,25,0,5Dimes.eu
 nba,2017,2,2016-11-28,400899709,Atlanta Hawks,Golden State Warriors,0,-14.0,217.0,100,105,27,26,28,19,29,21,30,25,0,5Dimes.eu
 nba,2017,2,2016-11-29,400899710,Detroit Pistons,Charlotte Hornets,0,-3.5,200.0,112,89,33,24,27,28,25,29,20,15,0,5Dimes.eu
@@ -5604,20 +5593,12 @@ nba,2017,2,2016-12-10,400899788,Milwaukee Bucks,Washington Wizards,0,-4.5,209.0,
 nba,2017,2,2016-12-09,400899786,Phoenix Suns,Los Angeles Lakers,0,-2.0,222.0,119,115,32,30,27,30,26,26,28,35,0,5Dimes.eu
 nba,2017,2,2016-12-09,400899787,New York Knicks,Sacramento Kings,0,-5.0,210.0,103,100,30,24,24,25,32,21,24,23,0,5Dimes.eu
 nba,2017,2,2016-12-10,400899789,Denver Nuggets,Orlando Magic,0,1.0,203.5,121,113,32,33,27,29,29,29,37,18,0,BETONLINE.ag
-nba,2017,2,2016-12-10,400899791,Charlotte Hornets,Cleveland Cavaliers,0,-7.5,213.5,105,116,26,26,29,24,36,31,25,24,0,numberfire
 nba,2017,2,2016-12-10,400899790,Portland Trail Blazers,Indiana Pacers,0,0.0,217.0,111,118,44,27,27,13,31,33,26,28,0,5Dimes.eu
-nba,2017,2,2016-12-10,400899796,Sacramento Kings,Utah Jazz,0,-5.5,196.5,84,104,25,25,26,8,29,23,26,26,0,numberfire
 nba,2017,2,2016-12-10,400899794,Dallas Mavericks,Houston Rockets,0,-13.5,207.0,87,109,27,22,20,18,36,24,26,23,0,BETONLINE.ag
-nba,2017,2,2016-12-11,400899798,Philadelphia 76ers,Detroit Pistons,0,-12.0,198.0,97,79,32,26,22,17,12,23,29,15,0,numberfire
 nba,2017,2,2016-12-10,400899792,Miami Heat,Chicago Bulls,0,-10.5,198.5,100,105,27,28,20,25,29,26,28,22,0,5Dimes.eu
 nba,2017,2,2016-12-10,400899793,Golden State Warriors,Memphis Grizzlies,0,10.0,210.0,89,110,16,22,27,24,31,30,26,23,0,5Dimes.eu
 nba,2017,2,2016-12-10,400899795,Brooklyn Nets,San Antonio Spurs,0,-14.0,210.0,101,130,26,26,18,31,41,26,36,27,0,5Dimes.eu
-nba,2017,2,2016-12-11,400899799,Boston Celtics,Oklahoma City Thunder,0,-3.5,207.5,96,99,24,19,28,25,21,18,28,32,0,numberfire
-nba,2017,2,2016-12-10,400899797,New Orleans Pelicans,LA Clippers,0,-15.0,199.5,105,133,31,24,25,25,35,26,37,35,0,numberfire
-nba,2017,2,2016-12-11,400899800,Golden State Warriors,Minnesota Timberwolves,0,10.0,225.5,116,108,30,30,18,38,27,31,30,20,0,numberfire
-nba,2017,2,2016-12-11,400899801,New Orleans Pelicans,Phoenix Suns,0,-2.0,216.0,120,119,25,26,25,34,31,27,24,28,1,numberfire
 nba,2017,2,2016-12-12,400899803,Charlotte Hornets,Indiana Pacers,0,1.5,208.5,94,110,20,23,30,21,25,20,31,34,0,5Dimes.eu
-nba,2017,2,2016-12-11,400899802,New York Knicks,Los Angeles Lakers,0,2.5,217.0,118,112,32,25,27,34,30,26,19,37,0,numberfire
 nba,2017,2,2016-12-12,400899805,Washington Wizards,Miami Heat,0,1.5,207.5,101,112,29,24,29,19,28,31,22,31,0,5Dimes.eu
 nba,2017,2,2016-12-12,400899804,Milwaukee Bucks,Toronto Raptors,0,-8.0,212.5,100,122,23,26,33,18,33,36,23,30,0,5Dimes.eu
 nba,2017,2,2016-12-12,400899808,Portland Trail Blazers,LA Clippers,0,-10.0,219.0,120,121,27,33,26,34,38,18,33,32,0,5Dimes.eu
@@ -5647,28 +5628,12 @@ nba,2017,2,2016-12-16,400899831,Detroit Pistons,Washington Wizards,0,1.0,203.5,1
 nba,2017,2,2016-12-15,400899827,Indiana Pacers,New Orleans Pelicans,0,-2.5,208.5,95,102,20,30,24,21,24,22,25,31,0,5Dimes.eu
 nba,2017,2,2016-12-16,400899835,Milwaukee Bucks,Chicago Bulls,0,-5.0,206.5,95,69,34,22,18,21,15,22,15,17,0,BETONLINE.ag
 nba,2017,2,2016-12-16,400899832,Brooklyn Nets,Orlando Magic,0,-6.0,217.5,111,118,28,24,30,29,25,28,30,35,0,5Dimes.eu
-nba,2017,2,2016-12-16,400899833,Charlotte Hornets,Boston Celtics,0,-6.0,207.5,88,96,22,28,19,19,23,18,28,27,0,numberfire
 nba,2017,2,2016-12-15,400899829,San Antonio Spurs,Phoenix Suns,0,8.0,211.0,107,92,23,28,23,33,20,23,28,21,0,5Dimes.eu
-nba,2017,2,2016-12-16,400899836,Sacramento Kings,Memphis Grizzlies,0,-5.0,193.0,96,92,24,28,24,20,19,23,23,27,0,numberfire
 nba,2017,2,2016-12-16,400899834,Atlanta Hawks,Toronto Raptors,0,-7.5,214.0,125,121,35,34,26,30,27,25,30,39,0,5Dimes.eu
 nba,2017,2,2016-12-16,400899839,LA Clippers,Miami Heat,0,7.0,206.5,102,98,31,29,19,23,27,19,23,29,0,5Dimes.eu
 nba,2017,2,2016-12-16,400899838,Los Angeles Lakers,Philadelphia 76ers,0,-2.0,208.5,100,89,30,23,21,26,18,22,24,25,0,5Dimes.eu
 nba,2017,2,2016-12-16,400899837,New Orleans Pelicans,Houston Rockets,0,-11.5,220.0,100,122,24,26,29,21,35,37,25,25,0,BETONLINE.ag
-nba,2017,2,2016-12-17,400899841,Phoenix Suns,Oklahoma City Thunder,0,-6.0,215.5,101,114,20,19,30,32,30,24,35,25,0,numberfire
 nba,2017,2,2016-12-16,400899840,Dallas Mavericks,Utah Jazz,0,-12.0,185.5,100,103,29,29,19,23,33,31,26,13,0,5Dimes.eu
-nba,2017,2,2016-12-17,400899842,Indiana Pacers,Detroit Pistons,0,-4.5,200.5,105,90,27,28,28,22,26,18,25,21,0,numberfire
-nba,2017,2,2016-12-17,400899843,Charlotte Hornets,Atlanta Hawks,0,-2.5,208.0,107,99,22,31,27,27,22,20,32,25,0,numberfire
-nba,2017,2,2016-12-18,400899853,Sacramento Kings,Dallas Mavericks,0,1.0,194.5,79,99,21,23,14,21,28,27,21,23,0,numberfire
-nba,2017,2,2016-12-17,400899847,Portland Trail Blazers,Golden State Warriors,0,-14.0,234.5,90,135,21,24,27,18,39,31,38,27,0,numberfire
-nba,2017,2,2016-12-17,400899846,New York Knicks,Denver Nuggets,0,-4.0,215.5,114,127,22,32,26,34,33,29,34,31,0,numberfire
-nba,2017,2,2016-12-17,400899844,Los Angeles Lakers,Cleveland Cavaliers,0,-15.5,219.0,108,119,31,28,24,25,26,36,27,30,0,numberfire
-nba,2017,2,2016-12-18,400899850,Brooklyn Nets,Philadelphia 76ers,0,-1.0,215.0,107,108,32,25,29,21,30,24,29,25,0,numberfire
-nba,2017,2,2016-12-17,400899845,Houston Rockets,Minnesota Timberwolves,0,2.5,220.5,111,109,28,16,23,28,24,33,23,15,1,numberfire
-nba,2017,2,2016-12-18,400899848,LA Clippers,Washington Wizards,0,5.5,212.5,110,117,27,28,32,23,28,24,33,32,0,numberfire
-nba,2017,2,2016-12-18,400899851,Toronto Raptors,Orlando Magic,0,6.0,212.5,109,79,23,32,29,25,30,21,13,15,0,numberfire
-nba,2017,2,2016-12-18,400899849,Utah Jazz,Memphis Grizzlies,0,1.5,185.5,82,73,18,16,27,21,18,17,23,15,0,numberfire
-nba,2017,2,2016-12-18,400899852,Boston Celtics,Miami Heat,0,4.5,202.5,105,95,37,21,19,28,19,22,30,24,0,numberfire
-nba,2017,2,2016-12-18,400899854,New Orleans Pelicans,San Antonio Spurs,0,-12.0,208.0,100,113,26,23,22,29,30,31,31,21,0,numberfire
 nba,2017,2,2016-12-19,400899857,Atlanta Hawks,Oklahoma City Thunder,0,-2.5,208.5,110,108,22,26,33,29,16,37,25,30,0,5Dimes.eu
 nba,2017,2,2016-12-19,400899856,Detroit Pistons,Chicago Bulls,0,-3.0,196.0,82,113,19,15,29,19,35,34,28,16,0,5Dimes.eu
 nba,2017,2,2016-12-19,400899855,Washington Wizards,Indiana Pacers,0,-5.0,211.0,105,107,36,21,22,26,29,28,31,19,0,5Dimes.eu

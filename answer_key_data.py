@@ -23,6 +23,8 @@ import json
 import os
 import re
 import sys
+import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta
@@ -72,10 +74,19 @@ LEAGUES = {
             2026: ("2025-10-15", "2026-06-30"),
         },
     },
+    # College odds coverage (probed Aug 8 2026): MEN'S lines exist back to at
+    # least 2015 even for mid-list games (5Dimes era; config starts at 2019 —
+    # extend earlier if ever wanted); WOMEN'S lines start ~2022 (2019/2021
+    # have none). CBB 2020 ends at the Mar 12 shutdown (tournament cancelled).
     "cbb": {
         "path": "mens-college-basketball", "periods": 2,
         "extra": "&groups=50&limit=500",
         "seasons": {
+            2019: ("2018-11-06", "2019-04-09"),
+            2020: ("2019-11-05", "2020-03-12"),
+            2021: ("2020-11-25", "2021-04-06"),
+            2022: ("2021-11-09", "2022-04-05"),
+            2023: ("2022-11-07", "2023-04-04"),
             2024: ("2023-11-01", "2024-04-15"),
             2025: ("2024-11-01", "2025-04-15"),
             2026: ("2025-11-01", "2026-04-15"),
@@ -85,6 +96,8 @@ LEAGUES = {
         "path": "womens-college-basketball", "periods": 4,
         "extra": "&groups=50&limit=500",
         "seasons": {
+            2022: ("2021-11-09", "2022-04-04"),
+            2023: ("2022-11-07", "2023-04-03"),
             2024: ("2023-11-01", "2024-04-15"),
             2025: ("2024-11-01", "2025-04-15"),
             2026: ("2025-11-01", "2026-04-15"),
@@ -93,6 +106,9 @@ LEAGUES = {
 }
 
 PROVIDER_PREF = ["draftkings", "espn bet"]   # then anything with a close line
+# NOT sportsbooks — ESPN also carries prediction services whose numbers are
+# model projections, not market lines (seen live on WCBB: "accuscore").
+PROVIDER_SKIP = {"accuscore", "numberfire", "teamrankings"}
 
 # Plausible closing-line ranges per league. ESPN's odds docs are inconsistent
 # across eras — some store an ODDS PRICE (e.g. -125) where the total belongs,
@@ -112,9 +128,19 @@ FIELDS = (["league", "season", "season_type", "date", "event_id", "away",
 
 
 def fetch_json(url, timeout=25):
+    """ESPN fetch with one backoff-retry on 403: sustained bulk pulls can
+    trip ESPN's WAF rate limit (hit Aug 8 2026 ~35k requests into the college
+    backfill — all dates 403'd until the block lifted)."""
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code != 403:
+            raise
+        time.sleep(20)
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.load(r)
 
 
 def csv_path(league):
@@ -162,7 +188,8 @@ def extract_close(odds_doc, league):
 
     for it in sorted(items, key=rank):
         name = ((it.get("provider") or {}).get("name") or "")
-        if "live" in name.lower():
+        low = name.lower()
+        if "live" in low or any(p in low for p in PROVIDER_SKIP):
             continue
         home = it.get("homeTeamOdds") or {}
         spread_cands = [_side_num((home.get(ph) or {}).get("pointSpread"))
@@ -266,7 +293,9 @@ def save_noodds(league, ids):
     os.replace(tmp, noodds_path(league))
 
 
-def build(league, only_season=None):
+def build(league, only_season=None, recent_days=None):
+    """recent_days: walk only the last N days of each season window — the
+    cheap daily top-up mode (off-season leagues then walk zero dates)."""
     cfg = LEAGUES[league]
     have = load_existing(league)
     noodds = load_noodds(league)
@@ -286,13 +315,15 @@ def build(league, only_season=None):
         start = datetime.strptime(s, "%Y-%m-%d").date()
         end = min(datetime.strptime(e, "%Y-%m-%d").date() if e else yesterday,
                   yesterday)
+        if recent_days:
+            start = max(start, yesterday - timedelta(days=recent_days - 1))
         if start > end:
             continue
         # 1) walk scoreboards for the season's candidate games
         cand = []
         bad_dates = 0
         dates = list(daterange(start, end))
-        with ThreadPoolExecutor(max_workers=8) as ex:
+        with ThreadPoolExecutor(max_workers=4) as ex:
             for res in ex.map(lambda d: scoreboard_games(cfg, d), dates):
                 if res is None:
                     bad_dates += 1
@@ -313,7 +344,7 @@ def build(league, only_season=None):
                 return row, None
             return row, extract_close(doc, league)
 
-        with ThreadPoolExecutor(max_workers=16) as ex:
+        with ThreadPoolExecutor(max_workers=10) as ex:
             futs = [ex.submit(get_odds, r) for r in cand]
             for fut in as_completed(futs):
                 row, got = fut.result()
@@ -330,6 +361,8 @@ def build(league, only_season=None):
                 writer.writerow(row)
                 have.add(row["event_id"])
                 added += 1
+                if added % 500 == 0:      # college seasons are big; a killed
+                    out.flush()           # run should lose at most ~500 rows
         out.flush()
         save_noodds(league, noodds)
         grand_added += added
@@ -345,8 +378,10 @@ def main():
     ap = argparse.ArgumentParser(description="Build Answer Key historical CSVs")
     ap.add_argument("--league", required=True, choices=sorted(LEAGUES))
     ap.add_argument("--season", type=int, help="only this season label")
+    ap.add_argument("--recent", type=int,
+                    help="walk only the last N days (daily top-up mode)")
     a = ap.parse_args()
-    build(a.league, a.season)
+    build(a.league, a.season, a.recent)
 
 
 if __name__ == "__main__":
