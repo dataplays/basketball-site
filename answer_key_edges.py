@@ -22,6 +22,7 @@ import csv
 import os
 import sys
 import urllib.parse
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import median
 
@@ -36,6 +37,19 @@ OUT_DIR = os.environ.get("BBALL_DATA_DIR") or (
 
 MIN_EV = 2.0          # % — surface threshold
 HOURS = 30            # upcoming window
+
+# Books an edge may be BET at (Odds API keys). Everything else is used only
+# to anchor the sample — see ANCHOR_BOOKS below.
+BET_BOOKS = {
+    "fanduel": "FanDuel",
+    "betrivers": "BetRivers",
+    "williamhill_us": "Caesars",     # Caesars' live key (not "caesars")
+    "thescore": "theScore",
+}
+# The sample anchor stays the BROAD sharp-book consensus (ALLOWED_BOOKS): it
+# estimates what the market thinks this game IS, which is a better anchor
+# from many books than from four. Only prices are restricted to BET_BOOKS.
+ANCHOR_BOOKS = ALLOWED_BOOKS
 Q_MARKETS = "h2h,spreads,totals,spreads_h1,totals_h1,spreads_q1,totals_q1,team_totals"
 H_MARKETS = "h2h,spreads,totals,spreads_h1,totals_h1,team_totals"   # halves leagues
 
@@ -79,67 +93,56 @@ def fetch_event_odds(sport_key, event_id, markets):
         return None
 
 
-def collect_market(doc, market_key, home_team=None, team=None):
-    """-> (consensus_line, {side: (best_odds, book)}) for one market.
+def market_data(doc, market_key, home_team=None, team=None, bet_books=None):
+    """-> (consensus_line, {side: [(thr, odds, book), ...]})
 
-    spreads*: line = HOME handicap, sides 'home'/'away'.
-    totals*/team_totals: line = the total, sides 'over'/'under'
-      (team_totals filtered to outcomes whose description == team).
-    h2h: line = None, sides 'home'/'away'.
+    consensus_line: median across ANCHOR_BOOKS (spreads = HOME handicap,
+      totals = the total, h2h = None) — anchors the historical sample.
+    offers: from BET_BOOKS only, each at THAT BOOK'S OWN posted number.
+      Pricing every book at its own line (rather than only at the consensus)
+      matters once the bettable set is small: a book sitting half a point off
+      the consensus would otherwise be dropped, and a better line at worse
+      odds can still be the higher-EV bet. Callers price every offer and keep
+      the best.
+
+    `thr` convention: spreads -> a MARGIN threshold (home wins if margin >
+      thr, away wins if margin < thr; equals the AWAY handicap either way);
+      totals/team totals -> the total; h2h -> None.
     """
-    per_book = {}                       # book -> {side: (line, odds)}
+    bet_books = bet_books if bet_books is not None else BET_BOOKS
+    anchor_pts = []
+    offers = defaultdict(list)
     for bm in (doc or {}).get("bookmakers", []) or []:
-        if bm.get("key") not in ALLOWED_BOOKS:
+        bkey = bm.get("key")
+        if bkey not in ANCHOR_BOOKS and bkey not in bet_books:
             continue
         for mk in bm.get("markets", []) or []:
             if mk.get("key") != market_key:
                 continue
-            entry = {}
             for oc in mk.get("outcomes", []) or []:
-                name, price = oc.get("name"), oc.get("price")
-                pt = oc.get("point")
+                name, price, pt = oc.get("name"), oc.get("price"), oc.get("point")
                 if price is None:
                     continue
+                if market_key == "team_totals" and (oc.get("description") or "") != team:
+                    continue
                 if market_key == "h2h":
-                    side = ("home" if name == home_team else
-                            "away" if name != home_team else None)
-                    entry[side] = (None, price)
+                    side, thr = ("home" if name == home_team else "away"), None
                 elif market_key.startswith("spreads"):
-                    side = "home" if name == home_team else "away"
-                    entry[side] = (pt, price)
-                elif market_key == "team_totals":
-                    if (oc.get("description") or "") != team:
+                    if pt is None:
                         continue
-                    entry[name.lower()] = (pt, price)
-                else:                    # totals*
-                    entry[name.lower()] = (pt, price)
-            if entry:
-                per_book[bm["key"]] = entry
-    if not per_book:
-        return None, {}
-    if market_key == "h2h":
-        best = {}
-        for bk, entry in per_book.items():
-            for side, (_, odds) in entry.items():
-                if side and (side not in best or odds > best[side][0]):
-                    best[side] = (odds, bk)
-        return None, best
-    # consensus line = median of the HOME line (spreads) / total across books
-    ref_side = "home" if market_key.startswith("spreads") else "over"
-    lines = [e[ref_side][0] for e in per_book.values()
-             if ref_side in e and e[ref_side][0] is not None]
-    if not lines:
-        return None, {}
-    L = median(lines)
-    best = {}
-    for bk, entry in per_book.items():
-        for side, (pt, odds) in entry.items():
-            want = -L if (market_key.startswith("spreads") and side == "away") else L
-            if pt is None or abs(pt - want) > 1e-9:
-                continue                # only prices at the consensus line
-            if side not in best or odds > best[side][0]:
-                best[side] = (odds, bk)
-    return L, best
+                    side = "home" if name == home_team else "away"
+                    thr = -pt if side == "home" else pt
+                    if bkey in ANCHOR_BOOKS and side == "home":
+                        anchor_pts.append(pt)
+                else:                              # totals* / team_totals
+                    if pt is None:
+                        continue
+                    side, thr = (name or "").lower(), pt
+                    if bkey in ANCHOR_BOOKS and side == "over":
+                        anchor_pts.append(pt)
+                if bkey in bet_books:
+                    offers[side].append((thr, price, bkey))
+    return (median(anchor_pts) if anchor_pts else None), dict(offers)
 
 
 def emp_counts(xs, line):
@@ -153,6 +156,11 @@ def ev_pct(n_win, n_lose, n_push, odds):
     if n == 0:
         return None
     return 100 * (n_win * (american_to_dec(odds) - 1) - n_lose) / n
+
+
+def side_name(side, home, away):
+    return {"home": home, "away": away,
+            "over": "Over", "under": "Under"}.get(side, side)
 
 
 def normalized_metrics(lg, spread, total, n, w):
@@ -193,13 +201,14 @@ def normalized_metrics(lg, spread, total, n, w):
     return m, sample
 
 
-def game_edges(lg, ev, doc, n, w, max_dist):
+def game_edges(lg, ev, doc, n, w, max_dist, bet_books=None):
     """-> dict with anchor/sample info + [edge dicts]; 'no_lines' on failure.
     Uses pure Feustel sampling when the line has support; falls back to the
     normalized wide sample (flagged) when it doesn't."""
+    bet_books = bet_books if bet_books is not None else BET_BOOKS
     home, away = ev["home_team"], ev["away_team"]
-    fg_spread, _ = collect_market(doc, "spreads", home_team=home)
-    fg_total, _ = collect_market(doc, "totals")
+    fg_spread, _ = market_data(doc, "spreads", home_team=home)
+    fg_total, _ = market_data(doc, "totals")
     if fg_spread is None or fg_total is None:
         return {"fail": "no_lines"}
     rows = ak.load_rows(lg)
@@ -231,54 +240,55 @@ def game_edges(lg, ev, doc, n, w, max_dist):
     for mkey, label, xs, kind, team in checks:
         if not xs:
             continue
-        L, best = collect_market(doc, mkey, home_team=home, team=team)
-        if not best:
+        _, offers = market_data(doc, mkey, home_team=home, team=team,
+                                bet_books=bet_books)
+        if not offers:
             continue
-        if kind == "ml":
-            wins = sum(1 for x in xs if x > 0)
-            dec = sum(1 for x in xs if x != 0)
-            for side, other in (("home", "away"), ("away", "home")):
-                if side not in best:
+        wins = sum(1 for x in xs if x > 0)
+        decided = sum(1 for x in xs if x != 0)
+        for side, side_offers in offers.items():
+            best = None
+            for thr, odds, book in side_offers:      # price each book's OWN line
+                if kind == "ml":
+                    if not decided:
+                        continue
+                    nw = wins if side == "home" else decided - wins
+                    nl, push, disp, fair = decided - nw, 0, "", ""
+                elif kind == "spread":
+                    o, u, push = emp_counts(xs, thr)
+                    nw, nl = (o, u) if side == "home" else (u, o)
+                    disp = fmt_odds(-thr if side == "home" else thr)
+                    fair = f"{ak.half_line(-median(xs)):+g}"
+                else:
+                    o, u, push = emp_counts(xs, thr)
+                    nw, nl = (o, u) if side == "over" else (u, o)
+                    disp = f"{'o' if side == 'over' else 'u'}{thr:g}"
+                    fair = f"{ak.half_line(median(xs)):g}"
+                e = ev_pct(nw, nl, push, odds)
+                if e is None:
                     continue
-                nw = wins if side == "home" else dec - wins
-                odds, bk = best[side]
-                e = ev_pct(nw, dec - nw, 0, odds)
-                edges.append({"label": label, "line": "",
-                              "side": home if side == "home" else away,
-                              "odds": odds, "book": bk, "ev": e,
-                              "emp": 100 * nw / dec if dec else 0,
-                              "fair": ""})
-            continue
-        if kind == "spread":
-            thr = -L                     # home covers when margin > -homeline
-            o, u, p = emp_counts(xs, thr)
-            fair = ak.half_line(-median(xs))
-            sides = (("home", o, u, fmt_odds(L), home),
-                     ("away", u, o, fmt_odds(-L), away))
-        else:
-            o, u, p = emp_counts(xs, L)
-            fair = ak.half_line(median(xs))
-            sides = (("over", o, u, f"o{L:g}", "Over"),
-                     ("under", u, o, f"u{L:g}", "Under"))
-        for side, nw, nl, disp, sname in sides:
-            if side not in best:
-                continue
-            odds, bk = best[side]
-            e = ev_pct(nw, nl, p, odds)
-            edges.append({"label": label, "line": disp, "side": sname,
-                          "odds": odds, "book": bk, "ev": e,
-                          "emp": 100 * nw / (nw + nl) if nw + nl else 0,
-                          "fair": f"{fair:+g}" if kind == "spread" else f"{fair:g}"})
+                cand = {"label": label, "line": disp,
+                        "side": side_name(side, home, away),
+                        "odds": odds, "book": bet_books.get(book, book),
+                        "ev": e, "emp": 100 * nw / (nw + nl) if nw + nl else 0,
+                        "fair": fair}
+                if best is None or cand["ev"] > best["ev"]:
+                    best = cand
+            if best:
+                edges.append(best)
     return {"anchor": (fg_spread, fg_total), "n": len(sample),
             "radius": radius, "center": center, "edges": edges,
             "basis": basis}
 
 
-def run(leagues, min_ev, hours, n, w, write_csv, max_dist):
+def run(leagues, min_ev, hours, n, w, write_csv, max_dist, bet_books=None):
+    bet_books = bet_books if bet_books is not None else BET_BOOKS
     all_rows = []
     stamp = datetime.now().strftime("%Y-%m-%d")
     print(f"\nANSWER KEY EDGES — {stamp}  (min EV {min_ev:g}%, sample N={n}, "
           f"total wt 1/{w:g}, max dist {max_dist:g})")
+    print(f"  Bettable books: {', '.join(sorted(bet_books.values()))}"
+          f"   (sample anchored on the broad sharp-book consensus)")
     for lg in leagues:
         if not ak.load_rows(lg):
             print(f"\n{ak.LEAGUE_CFG[lg]['label']}: no Answer Key dataset — "
@@ -294,11 +304,12 @@ def run(leagues, min_ev, hours, n, w, write_csv, max_dist):
         print(f"\n{label} — {len(events)} game(s)")
         for ev in sorted(events, key=lambda e: e["_tip"]):
             doc = fetch_event_odds(sport, ev["id"], markets)
-            got = game_edges(lg, ev, doc, n, w, max_dist) if doc else {"fail": "no_lines"}
+            got = (game_edges(lg, ev, doc, n, w, max_dist, bet_books)
+                   if doc else {"fail": "no_lines"})
             tip = ev["_tip"].astimezone().strftime("%I:%M %p").lstrip("0")
             head = f"  {ev['away_team']} @ {ev['home_team']}  ({tip})"
             if got.get("fail") == "no_lines":
-                print(f"{head}  — no sharp-book lines yet")
+                print(f"{head}  — no lines posted yet")
                 continue
             (s, t), sn, radius = got["anchor"], got["n"], got["radius"]
             cs, ct = got["center"]
@@ -360,14 +371,20 @@ def main():
     ap.add_argument("--w", type=float, default=ak.DEFAULT_W)
     ap.add_argument("--max-dist", type=float, default=ak.DEFAULT_MAX_DIST,
                     help="sample radius cap (0 = uncapped, not recommended)")
+    ap.add_argument("--books", help="comma-separated Odds API book keys to bet "
+                                    f"(default: {','.join(sorted(BET_BOOKS))})")
     ap.add_argument("--csv", action="store_true")
     a = ap.parse_args()
     if not THE_ODDS_API_KEY:
         print("THE_ODDS_API_KEY not set")
         sys.exit(1)
+    books = BET_BOOKS
+    if a.books:
+        books = {k.strip(): BET_BOOKS.get(k.strip(), k.strip())
+                 for k in a.books.split(",") if k.strip()}
     leagues = [a.league] if a.league else [lg for lg in ("wnba", "nba", "cbb", "wcbb")
                                            if os.path.exists(ak.csv_path(lg))]
-    run(leagues, a.min_ev, a.hours, a.n, a.w, a.csv, a.max_dist)
+    run(leagues, a.min_ev, a.hours, a.n, a.w, a.csv, a.max_dist, books)
 
 
 if __name__ == "__main__":
