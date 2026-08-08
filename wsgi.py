@@ -186,6 +186,7 @@ EXTRA_TOOLS = {
     "line_movement_report": "Line Movement \u2014 open\u2192close spread steam, last 5 games per team",
     "mack_model_games": "Mack Model: Games \u2014 Pinnacle vs BetRivers sides/totals/ML/team totals (FG/1H/1Q)",
     "intl_line_compare": "Intl Line Compare \u2014 +EV vs de-vigged Pinnacle (EuroLeague/NBL; FD/BR/CZR/theScore)",
+    "answer_key_edges": "Answer Key: Edges \u2014 today's slate vs empirical prices (ML/FG/1H/1Q/team totals)",
 }
 for _tname, _tlabel in EXTRA_TOOLS.items():
     if (HERE / f"{_tname}.py").exists() and _tname not in TOOLS:

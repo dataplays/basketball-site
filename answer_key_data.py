@@ -77,6 +77,15 @@ LEAGUES = {
 }
 
 PROVIDER_PREF = ["draftkings", "espn bet"]   # then anything with a close line
+
+# Plausible closing-line ranges per league. ESPN's odds docs are inconsistent
+# across eras — some store an ODDS PRICE (e.g. -125) where the total belongs,
+# which poisoned season 2023 on the first build (mean "total" 118, min -125).
+# A candidate value outside these ranges is rejected and the next phase /
+# provider / field is tried; no plausible pair -> the game is dropped.
+TOTAL_RANGE = {"wnba": (110, 220), "nba": (160, 290),
+               "cbb": (80, 220), "wcbb": (80, 220)}
+SPREAD_MAX = 45.0
 MAX_P = 4                                    # p1..p4 columns (CBB uses p1/p2)
 FIELDS = (["league", "season", "season_type", "date", "event_id", "away",
            "home", "neutral", "spread_home", "total", "away_score",
@@ -114,11 +123,19 @@ def _side_num(node):
     return _num(node.get("american") or node.get("alternateDisplayValue"))
 
 
-def extract_close(odds_doc):
+def extract_close(odds_doc, league):
     """-> (spread_home, total, provider_name) or (None, None, None).
     Prefers DK, then ESPN BET, then any provider carrying a close (falls
-    back to current, then the item's top-level spread/overUnder)."""
+    back to current, then the item's top-level spread/overUnder). Every
+    candidate is range-validated — see TOTAL_RANGE note above."""
+    lo, hi = TOTAL_RANGE[league]
     items = (odds_doc or {}).get("items") or []
+
+    def ok_spread(v):
+        return v is not None and abs(v) <= SPREAD_MAX
+
+    def ok_total(v):
+        return v is not None and lo <= v <= hi
 
     def rank(it):
         name = ((it.get("provider") or {}).get("name") or "").lower()
@@ -132,18 +149,14 @@ def extract_close(odds_doc):
         if "live" in name.lower():
             continue
         home = it.get("homeTeamOdds") or {}
-        spread = total = None
-        for phase in ("close", "current", "open"):
-            if spread is None:
-                spread = _side_num((home.get(phase) or {}).get("pointSpread"))
-            if total is None:
-                total = _side_num(((it.get(phase) or {}) or {}).get("total"))
-            if spread is not None and total is not None:
-                break
-        if spread is None:
-            spread = _num(it.get("spread"))
-        if total is None:
-            total = _num(it.get("overUnder"))
+        spread_cands = [_side_num((home.get(ph) or {}).get("pointSpread"))
+                        for ph in ("close", "current", "open")]
+        spread_cands.append(_num(it.get("spread")))
+        total_cands = [_side_num(((it.get(ph) or {}) or {}).get("total"))
+                       for ph in ("close", "current", "open")]
+        total_cands.append(_num(it.get("overUnder")))
+        spread = next((v for v in spread_cands if ok_spread(v)), None)
+        total = next((v for v in total_cands if ok_total(v)), None)
         if spread is not None and total is not None:
             return spread, total, name
     return None, None, None
@@ -282,7 +295,7 @@ def build(league, only_season=None):
                 doc = fetch_json(ODDS.format(path=cfg["path"], eid=row["event_id"]))
             except Exception:
                 return row, None
-            return row, extract_close(doc)
+            return row, extract_close(doc, league)
 
         with ThreadPoolExecutor(max_workers=16) as ex:
             futs = [ex.submit(get_odds, r) for r in cand]

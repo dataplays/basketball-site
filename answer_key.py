@@ -86,7 +86,13 @@ def load_rows(lg):
 
 # ── sampling ──
 
-def sample_games(rows, spread, total, n, w, neutral_mode, include_playoffs):
+DEFAULT_MAX_DIST = 4.0    # don't sample games farther than this from the
+                          # target line — beyond it the tool is extrapolating,
+                          # not sampling (surfaced as "thin support" instead)
+
+
+def sample_games(rows, spread, total, n, w, neutral_mode, include_playoffs,
+                 max_dist=DEFAULT_MAX_DIST):
     cand = []
     for r in rows:
         if not include_playoffs and r["season_type"] == 3:
@@ -96,6 +102,8 @@ def sample_games(rows, spread, total, n, w, neutral_mode, include_playoffs):
         if neutral_mode == "only" and not r["neutral"]:
             continue
         d = math.hypot(r["spread"] - spread, (r["total"] - total) / w)
+        if max_dist and d > max_dist:
+            continue
         cand.append((d, r))
     cand.sort(key=lambda x: x[0])
     sel = cand[:n]
@@ -166,17 +174,21 @@ def normal_price(x_mean, sd, line):
 
 
 def build_report(lg, spread, total, n=DEFAULT_N, w=DEFAULT_W,
-                 neutral_mode="exclude", include_playoffs=True):
+                 neutral_mode="exclude", include_playoffs=True,
+                 max_dist=DEFAULT_MAX_DIST):
     cfg = LEAGUE_CFG[lg]
     rows = load_rows(lg)
     if not rows:
         return {"error": f"No dataset for {cfg['label']} yet — run: "
                          f"py -3 answer_key_data.py --league {lg}"}
     sample, radius = sample_games(rows, spread, total, n, w,
-                                  neutral_mode, include_playoffs)
+                                  neutral_mode, include_playoffs, max_dist)
     if len(sample) < 30:
-        return {"error": f"Only {len(sample)} comparable games — dataset too "
-                         f"thin for these filters."}
+        return {"error": f"Only {len(sample)} comparable games within distance "
+                         f"{max_dist:g} of this line — thin historical support "
+                         f"(this market sits at the edge of the dataset). "
+                         f"Raise Max dist to extrapolate anyway, at your own "
+                         f"risk."}
     m = metrics(sample, lg)
     scale = math.sqrt(max(total, 1) / cfg["avg_total"])
     sd_m = cfg["spread_sd"] * scale
@@ -445,7 +457,7 @@ def render_page(rep, form):
 
 
 def build_form(lg="wnba", spread="", total="", n=DEFAULT_N, w=DEFAULT_W,
-               neutral="exclude", playoffs="on"):
+               neutral="exclude", playoffs="on", max_dist=DEFAULT_MAX_DIST):
     opts = "".join(
         f"<option value='{k}'{' selected' if k == lg else ''}>"
         f"{v['label']}{'' if os.path.exists(csv_path(k)) else ' (no data yet)'}"
@@ -465,6 +477,8 @@ def build_form(lg="wnba", spread="", total="", n=DEFAULT_N, w=DEFAULT_W,
         f"value='{n}' min='30' max='2000'></div>"
         f"<div><label>Total weight (1/W)</label><input type='number' "
         f"step='0.05' name='w' value='{w}'></div>"
+        f"<div><label>Max dist (0 = off)</label><input type='number' "
+        f"step='0.5' name='max_dist' value='{max_dist:g}'></div>"
         f"<div><label>Site filter</label><select name='neutral'>{nsel}</select></div>"
         f"<div><label>Playoffs</label><input type='checkbox' name='playoffs'"
         f"{' checked' if playoffs else ''}></div>"
@@ -489,11 +503,16 @@ try:
                                    build_form(lg))
             n = int(request.form.get("n") or DEFAULT_N)
             w = float(request.form.get("w") or DEFAULT_W)
+            try:
+                max_dist = float(request.form.get("max_dist") or 0)
+            except ValueError:
+                max_dist = DEFAULT_MAX_DIST
             neutral = request.form.get("neutral", "exclude")
             playoffs = bool(request.form.get("playoffs"))
-            rep = build_report(lg, spread, total, n, w, neutral, playoffs)
+            rep = build_report(lg, spread, total, n, w, neutral, playoffs,
+                               max_dist)
             form = build_form(lg, f"{spread:g}", f"{total:g}", n, w, neutral,
-                              "on" if playoffs else "")
+                              "on" if playoffs else "", max_dist)
             return render_page(rep, form)
         return render_page(None, build_form())
 except ImportError:                       # console mode still works sans flask
@@ -502,7 +521,7 @@ except ImportError:                       # console mode still works sans flask
 
 def console(a):
     rep = build_report(a.league, a.spread, a.total, a.n, a.w,
-                       a.neutral, not a.no_playoffs)
+                       a.neutral, not a.no_playoffs, a.max_dist)
     if "error" in rep:
         print(rep["error"])
         return 1
@@ -536,6 +555,8 @@ def main():
     ap.add_argument("--total", type=float)
     ap.add_argument("--n", type=int, default=DEFAULT_N)
     ap.add_argument("--w", type=float, default=DEFAULT_W)
+    ap.add_argument("--max-dist", type=float, default=DEFAULT_MAX_DIST,
+                    help="sample radius cap, 0 = uncapped")
     ap.add_argument("--neutral", choices=["exclude", "include", "only"],
                     default="exclude")
     ap.add_argument("--no-playoffs", action="store_true")
