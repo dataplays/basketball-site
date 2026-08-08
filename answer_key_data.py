@@ -39,9 +39,17 @@ ODDS = ("https://sports.core.api.espn.com/v2/sports/basketball/leagues/"
 # Season windows are (start, end) inclusive; label = the season's ending year
 # for winter leagues, the calendar year for summer leagues (WNBA).
 LEAGUES = {
+    # ESPN odds coverage (probed Aug 8 2026): WNBA lines exist from ~2019
+    # (2015/2017 have zero providers); NBA lines exist back to at least 2015.
+    # WNBA 2020 (COVID bubble: every game neutral-site at IMG, unreliable
+    # neutral flags) is deliberately EXCLUDED; the NBA 2020 window ends at the
+    # Mar 12 shutdown so the Orlando bubble games are excluded the same way.
     "wnba": {
         "path": "wnba", "periods": 4, "extra": "",
         "seasons": {
+            2019: ("2019-05-20", "2019-10-15"),
+            2021: ("2021-05-10", "2021-10-31"),
+            2022: ("2022-05-01", "2022-09-30"),
             2023: ("2023-05-01", "2023-10-31"),
             2024: ("2024-05-01", "2024-10-31"),
             2025: ("2025-05-01", "2025-10-31"),
@@ -51,6 +59,14 @@ LEAGUES = {
     "nba": {
         "path": "nba", "periods": 4, "extra": "",
         "seasons": {
+            2016: ("2015-10-20", "2016-06-30"),
+            2017: ("2016-10-18", "2017-06-30"),
+            2018: ("2017-10-10", "2018-06-30"),
+            2019: ("2018-10-09", "2019-06-30"),
+            2020: ("2019-10-15", "2020-03-12"),   # pre-shutdown only
+            2021: ("2020-12-15", "2021-07-31"),
+            2022: ("2021-10-12", "2022-06-30"),
+            2023: ("2022-10-11", "2023-06-30"),
             2024: ("2023-10-15", "2024-06-30"),
             2025: ("2024-10-15", "2025-06-30"),
             2026: ("2025-10-15", "2026-06-30"),
