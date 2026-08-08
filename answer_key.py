@@ -341,11 +341,16 @@ th{color:#9ab;font-weight:600}
 .err{color:#ff7b6b;font-size:14px;margin:14px 0}
 .grid{display:flex;flex-wrap:wrap;gap:26px}
 .big{font-size:17px;color:#ffd76b;font-weight:700}
+a.menu{display:inline-block;color:#d4af37;text-decoration:none;font-size:13px;
+       font-weight:600;border:1px solid #d4af37;border-radius:6px;
+       padding:4px 12px;margin-bottom:8px}
+a.menu:hover{background:#d4af37;color:#10151c}
 """
 
 
 def render_page(rep, form):
     body = [f"<style>{CSS}</style><title>Answer Key</title>",
+            "<a class='menu' href='/'>&larr; Main Menu</a>",
             "<h1>&#128273; Answer Key &mdash; empirical derivative pricer</h1>",
             "<div class='note'>Feustel-style: prices read from historical games "
             "whose closing spread/total were closest to yours. "
