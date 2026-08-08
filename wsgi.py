@@ -192,6 +192,10 @@ for _tname, _tlabel in EXTRA_TOOLS.items():
         TOOLS.append(_tname)
         TOOL_LABELS[_tname] = _tlabel
 
+# Mack Model scanners get their own /mack page (kept in TOOLS so the
+# /run/<name> whitelist still allows them; filtered off the /tools list).
+MACK_TOOLS = ["mack_model", "mack_model_games"]
+
 # ── Landing + tools pages ────────────────────────────────────────────────────
 landing = Flask(__name__)
 
@@ -286,17 +290,13 @@ display:inline-block;margin-left:4px">&#9993; Contact Us</a></div></header>
       <div class=t>Line Movement</div>
       <div class=d>Open&rarr;close spread steam &mdash; last 5 games per team, every upcoming game</div>
     </a>
-    <a class=card style="border-left-color:#ba68c8" href="/tools?run=mack_model">
-      <div class=t>Mack Model</div>
-      <div class=d>Pinnacle vs BetRivers prop scanner &mdash; WNBA + NBA edges at matching lines</div>
-    </a>
-    <a class=card style="border-left-color:#9575cd" href="/tools?run=mack_model_games">
-      <div class=t>Mack Model: Games</div>
-      <div class=d>Pinnacle vs BetRivers game markets &mdash; sides, totals, ML &amp; team totals (FG/1H/1Q)</div>
+    <a class=card style="border-left-color:#ba68c8" href="/mack">
+      <div class=t>Mack Models</div>
+      <div class=d>Pinnacle-anchor scanners &mdash; player props + game markets (sides/totals/ML/TT)</div>
     </a>
     <a class=card style="border-left-color:var(--green)" href="/tools">
       <div class=t>Props Tools &rarr;</div>
-      <div class=d>Run projections, grading, Mack Model &amp; line movement on demand</div>
+      <div class=d>Run projections, grading &amp; line movement on demand</div>
     </a>
     {% if reports %}
       {% for r in reports %}
@@ -315,16 +315,18 @@ display:inline-block;margin-left:4px">&#9993; Contact Us</a></div></header>
 </div>
 <footer class=footer>Live data from ESPN, WarrenNolan &amp; Basketball-Reference &middot;
 projections update automatically &middot; <a href="/tools">Props Tools</a> &middot;
+<a href="/mack">Mack Models</a> &middot;
 <a href="/contact/">Contact Us</a></footer>
 </body></html>"""
 
 TOOLS_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
 {{ head_extra|safe }}
-<title>Props Tools</title><style>{{ css }}</style></head><body>
-<header><h1><span>&#9679;</span> Props Tools</h1>
+<title>{{ title }}</title><style>{{ css }}</style></head><body>
+<header><h1><span>&#9679;</span> {{ title }}</h1>
 <div class=sub><a class=back href="/">&larr; Main Menu</a></div></header>
 <div class=container>
+  {% if intro %}<div style="color:var(--muted);font-size:13px;margin:2px 0 14px">{{ intro }}</div>{% endif %}
   {% if tools %}
   {% for name,label,missing in tools %}
   <div class=tool>
@@ -384,14 +386,32 @@ def home():
     )
 
 
-@landing.route("/tools")
-def tools_page():
+def _tool_items(names):
     items = []
-    for name in TOOLS:
+    for name in names:
         missing = [f for f in TOOL_REQUIRES.get(name, []) if not (HERE / f).exists()]
         items.append((name, TOOL_LABELS.get(name, name), missing))
+    return items
+
+
+@landing.route("/tools")
+def tools_page():
+    names = [n for n in TOOLS if n not in MACK_TOOLS]
     return render_template_string(TOOLS_HTML, css=PAGE_CSS, head_extra=HEAD_EXTRA,
-                                  tools=items)
+                                  tools=_tool_items(names), title="Props Tools",
+                                  intro=None)
+
+
+@landing.route("/mack")
+def mack_page():
+    names = [n for n in MACK_TOOLS if n in TOOLS]
+    return render_template_string(
+        TOOLS_HTML, css=PAGE_CSS, head_extra=HEAD_EXTRA,
+        tools=_tool_items(names), title="Mack Models",
+        intro="Andrew Mack's Pinnacle-anchor strategy: flag soft-book prices "
+              "(BetRivers/FanDuel/Caesars) whose gap vs Pinnacle exceeds half "
+              "of Pinnacle's average vig at the SAME line. Run on slate days "
+              "midday-to-afternoon ET — Pinnacle posts late.")
 
 
 NOTFOUND_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
